@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pydantic
+aiohttp
+aiofiles
+requests
+cloudscraper
+curl-cffi 
+DrissionPage
+python-multipart
