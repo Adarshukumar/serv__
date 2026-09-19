@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>/test — Tests — Proxy as Different Users + Everywhere — User IP Only — Mercury</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=Instrument+Sans:wght@400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0a0b;--soft:#141415;--elev:#1c1c1f;--border:#232326;--text:#f5f5f0;--soft-text:#9a9aa0;--faint:#5a5a60;--accent:#ff4d2e;--mono:"JetBrains Mono",monospace;--sans:"Instrument Sans",sans-serif;--display:"Fraunces",serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);padding:20px;max-width:1000px;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:16px;border-bottom:1px solid var(--border);margin-bottom:20px}
+h1{font-family:var(--display);font-size:26px}
+h1 span{color:var(--accent)}
+.nav{display:flex;gap:6px;flex-wrap:wrap}
+.nav a{padding:6px 10px;border-radius:999px;background:var(--soft);border:1px solid var(--border);color:var(--soft-text);text-decoration:none;font-size:11px}
+.nav a.active{background:var(--text);color:var(--bg)}
+.panel{background:var(--soft);border:1px solid var(--border);border-radius:18px;padding:16px;margin-bottom:16px}
+.panel h2{font-family:var(--display);font-size:18px;margin-bottom:8px}
+.small{font-size:12px;color:var(--soft-text)}
+.log-box{background:#050507;border:1px solid #1a1a1e;border-radius:12px;padding:12px;font-family:var(--mono);font-size:11px;line-height:1.6;color:#8a8a90;max-height:60vh;overflow:auto;white-space:pre-wrap}
+.usage{font-family:var(--mono);font-size:11px;color:var(--soft-text);white-space:pre-wrap;background:var(--soft);border:1px solid var(--border);border-radius:12px;padding:12px;margin-top:10px;max-height:500px;overflow:auto}
+button{padding:8px 14px;border-radius:999px;border:1px solid var(--border);background:var(--elev);color:var(--text);font-size:12px;cursor:pointer;margin:4px}
+button.accent{background:var(--accent);color:#fff;border-color:var(--accent)}
+button.primary{background:var(--text);color:var(--bg)}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+input{padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:12px;flex:1}
+</style>
+</head>
+<body>
+<header>
+<h1><span>Mercury</span> — /test — Tests — User IP Only No Proxy — FAST</h1>
+<div class="nav">
+<a href="/">/</a><a href="/chat">/chat</a><a href="/logs">/logs</a><a href="/session">/session</a><a class="active" href="/test">/test</a><a href="/clone">/clone</a>
+</div>
+</header>
+
+<div class="panel">
+<h2>🔥 Tests — User IP Only No Proxy — Works Everywhere?</h2>
+<p class="small"><b>Proxy as Different Users:</b> Each proxy IP = different user connecting to server, which IP does Inception see? Without forwarding, server IP same for all (WRONG). With forwarding (7 headers + payload.user), user IP different per user (CORRECT). User IP only no proxy.<br><b>Everywhere or Just DeepInfra?</b> Works EVERYWHERE that respects headers (DeepInfra, mCloudFlare, Inception all behind Cloudflare log CF-Connecting-IP) not just DeepInfra.</p>
+<div class="row">
+<button id="testEverywhere" class="accent">🔥 Test Everywhere or Just DeepInfra? + Inception Chat</button>
+<button id="testProxyUsers" class="primary">🔥 Test Proxy as Different Users — Which IP Inception Sees?</button>
+</div>
+<div class="row">
+<label style="flex:2">Proxy IPs (different users, comma separated)<input type="text" id="proxyUsersIPs" value="1.2.3.4,5.6.7.8,9.10.11.12,203.0.113.45,8.8.8.8"></label>
+</div>
+<div class="log-box" id="logBox">Test logs will appear here... Shows which IP Inception sees — User IP not Server IP, user IP only no proxy, fast</div>
+<div class="usage" id="result"></div>
+</div>
+
+<script>
+async function fetchJSON(url, opts){const r=await fetch(url, opts); const t=await r.text(); try{return JSON.parse(t);}catch{return {raw:t};}}
+async function testEverywhere(){
+  const logBox=document.getElementById('logBox'); const res=document.getElementById('result');
+  logBox.textContent='Testing Everywhere or Just DeepInfra? + Inception Chat...\nUser IP 1.2.3.4 across providers, user IP only no proxy\n';
+  res.textContent='Loading...';
+  const j=await fetchJSON('/api/test-everywhere', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_ip:'1.2.3.4', prompt:'What is capital of France? in one word'})});
+  logBox.textContent=(j.logs||[]).join('\n');
+  res.textContent=JSON.stringify(j,null,2).slice(0,10000);
+}
+async function testProxyUsers(){
+  const ipsStr=document.getElementById('proxyUsersIPs').value;
+  const proxy_ips=ipsStr.split(',').map(s=>s.trim()).filter(Boolean);
+  const logBox=document.getElementById('logBox'); const res=document.getElementById('result');
+  logBox.textContent=`Testing Proxy as Different Users...\nProxy IPs (different users): ${proxy_ips.join(', ')}\nWhich IP does Inception see? User IP or Server IP? User IP only no proxy\n`;
+  res.textContent='Loading...';
+  const body={proxy_ips, prompt:'What is capital of France? in one word'};
+  const j=await fetchJSON('/api/proxy-users', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  logBox.textContent=(j.logs||[]).join('\n');
+  res.textContent=JSON.stringify(j,null,2).slice(0,10000);
+}
+document.getElementById('testEverywhere').onclick=testEverywhere;
+document.getElementById('testProxyUsers').onclick=testProxyUsers;
+</script>
+</body>
+</html>

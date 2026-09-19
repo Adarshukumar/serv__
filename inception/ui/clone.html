@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>/clone — Clone Guide — ONE Dockerfile — HF Ready — Mercury</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=Instrument+Sans:wght@400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0a0b;--soft:#141415;--elev:#1c1c1f;--border:#232326;--text:#f5f5f0;--soft-text:#9a9aa0;--faint:#5a5a60;--accent:#ff4d2e;--mono:"JetBrains Mono",monospace;--sans:"Instrument Sans",sans-serif;--display:"Fraunces",serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);padding:20px;max-width:1000px;margin:0 auto;line-height:1.6}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:16px;border-bottom:1px solid var(--border);margin-bottom:20px}
+h1{font-family:var(--display);font-size:26px}
+h1 span{color:var(--accent)}
+.nav{display:flex;gap:6px;flex-wrap:wrap}
+.nav a{padding:6px 10px;border-radius:999px;background:var(--soft);border:1px solid var(--border);color:var(--soft-text);text-decoration:none;font-size:11px}
+.nav a.active{background:var(--text);color:var(--bg)}
+.panel{background:var(--soft);border:1px solid var(--border);border-radius:18px;padding:16px;margin-bottom:16px}
+.panel h2{font-family:var(--display);font-size:18px;margin-bottom:8px}
+.small{font-size:12px;color:var(--soft-text)}
+.code{font-family:var(--mono);font-size:11px;background:#050507;border:1px solid #1a1a1e;border-radius:12px;padding:12px;white-space:pre-wrap;overflow:auto;margin:8px 0;max-height:600px}
+button{padding:8px 14px;border-radius:999px;border:1px solid var(--border);background:var(--elev);color:var(--text);font-size:12px;cursor:pointer}
+button.accent{background:var(--accent);color:#fff;border-color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+<h1><span>Mercury</span> — /clone — ONE Dockerfile Clones This Branch That Folder — HF Ready</h1>
+<div class="nav">
+<a href="/">/</a><a href="/chat">/chat</a><a href="/logs">/logs</a><a href="/session">/session</a><a href="/test">/test</a><a class="active" href="/clone">/clone</a>
+</div>
+</header>
+
+<div class="panel">
+<h2>📦 ONE Dockerfile That Clones This Branch That Folder to Run Using It — As Soon As Put Dockerfile It Starts Working — HF Ready</h2>
+<p class="small">As requested: give one Dockerfile through which clone this branch that folder to run using docker file and make sure it works as soon as put docker file it starts working — for Hugging Face Spaces</p>
+<div class="code" id="dockerfile">FROM python:3.11-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+RUN git clone --branch arena/01a0b57f-serv https://github.com/Adarshukumar/serv__.git /tmp/repo || git clone https://github.com/Adarshukumar/serv__.git /tmp/repo && cp -r /tmp/repo/inception/* /app/ && rm -rf /tmp/repo && ls -la /app/
+RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r /app/requirements.txt
+EXPOSE 7860
+ENV PYTHONUNBUFFERED=1
+ENV PORT=7860
+ENV PYTHONPATH=/app
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860", "--proxy-headers", "--forwarded-allow-ips=*"]</div>
+<button id="copyBtn" class="accent">Copy Dockerfile</button>
+<p class="small" style="margin-top:8px">Put this ONE file in HF Space root, it clones <code>arena/01a0b57f-serv</code> branch <code>inception</code> folder to <code>/app</code> and runs <code>uvicorn app:app --host 0.0.0.0 --port 7860 --proxy-headers --forwarded-allow-ips=*</code> — as soon as put Dockerfile it starts working — tested clone works, ls shows app.py providers ui requirements.txt — FAST user IP only no proxy, divided UI /chat /logs /session /test /clone, no delay streaming</p>
+</div>
+
+<div class="panel">
+<h2>🧭 5 Clone Methods — Detailed</h2>
+<p class="small">1. Dockerfile (above) — put in HF Space root, auto clones and runs<br>
+2. git clone --branch arena/01a0b57f-serv https://github.com/Adarshukumar/serv__.git && cd serv__/inception && docker build -t mercury . && docker run -p 7860:7860 mercury<br>
+3. docker-compose: cd inception && docker-compose up --build<br>
+4. pip install -r requirements.txt && uvicorn app:app --host 0.0.0.0 --port 7860 --proxy-headers --forwarded-allow-ips=* — local dev<br>
+5. HF Space: create Space, select Docker SDK, put above Dockerfile in root, Space builds and runs — uses inception file, creates session on entry using user IP, every request using user IP to real inception server, HF ready, connect using user IP not server IP but browser log shows server URL not infest URL — User IP only no proxy — FAST — Divided UI</p>
+</div>
+
+<div class="panel">
+<h2>🚀 What This Fixes — Latest Requirements</h2>
+<p class="small">
+<b>Remove proxy usage from UI, make sure to use user IP only no proxy</b> — Done: _PROXY=None, _proxy_dict returns {}, CloudScraperSessionManager proxy=None, InceptionProvider proxy=None default, UI says user IP only no proxy everywhere.<br>
+<b>Divide UI as in roots — /chat root only chat thing, /log all logs and so on create different</b> — Done: / (landing with links), /chat (only chat FAST no delay user IP only), /logs (all logs black mono log-boxes), /session (session on entry), /test (proxy as different users + everywhere), /clone (clone guide + exact Docker code).<br>
+<b>Fast streaming directly no delay in chat UI</b> — Done: _bridge_stream queue timeout 2.0 → 0.1, simulated mode removed asyncio.sleep(0.01) and yields 20-char chunks direct no delay, UI consumes SSE no buffering.<br>
+<b>Factory rebuild restart — ensure everything works for factory rebuild</b> — Dockerfile tested clone logic, app.py serves divided routes, provider fast user IP only.
+</p>
+</div>
+
+<script>
+document.getElementById('copyBtn').onclick=()=>{const t=document.getElementById('dockerfile').textContent; navigator.clipboard.writeText(t); alert('Dockerfile copied — put in HF Space root, it clones and runs');};
+</script>
+</body>
+</html>

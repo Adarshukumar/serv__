@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>/logs — All Logs — User IP Only — Mercury</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=Instrument+Sans:wght@400;500&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0a0b;--soft:#141415;--elev:#1c1c1f;--border:#232326;--text:#f5f5f0;--soft-text:#9a9aa0;--faint:#5a5a60;--accent:#ff4d2e;--mono:"JetBrains Mono",monospace;--sans:"Instrument Sans",sans-serif;--display:"Fraunces",serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);padding:20px;max-width:1100px;margin:0 auto}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:16px;border-bottom:1px solid var(--border);margin-bottom:20px}
+h1{font-family:var(--display);font-size:28px;letter-spacing:-0.02em}
+h1 span{color:var(--accent)}
+.nav{display:flex;gap:6px;flex-wrap:wrap}
+.nav a{padding:6px 10px;border-radius:999px;background:var(--soft);border:1px solid var(--border);color:var(--soft-text);text-decoration:none;font-size:11px}
+.nav a.active{background:var(--text);color:var(--bg)}
+.panel{background:var(--soft);border:1px solid var(--border);border-radius:18px;padding:16px;margin-bottom:16px}
+.panel h2{font-family:var(--display);font-size:18px;margin-bottom:8px}
+.small{font-size:12px;color:var(--soft-text)}
+.log-box{background:#050507;border:1px solid #1a1a1e;border-radius:12px;padding:12px;font-family:var(--mono);font-size:11px;line-height:1.6;color:#8a8a90;max-height:80vh;overflow:auto;white-space:pre-wrap}
+.log-box b{color:#b5ff4d}
+button{padding:8px 14px;border-radius:999px;border:1px solid var(--border);background:var(--elev);color:var(--text);font-family:var(--sans);font-size:12px;cursor:pointer}
+button.primary{background:var(--text);color:var(--bg)}
+</style>
+</head>
+<body>
+<header>
+<h1><span>Mercury</span> — /logs — All Logs — User IP Only</h1>
+<div class="nav">
+<a href="/">/</a><a href="/chat">/chat</a><a class="active" href="/logs">/logs</a><a href="/session">/session</a><a href="/test">/test</a><a href="/clone">/clone</a>
+</div>
+</header>
+
+<div class="panel">
+<h2>📊 Server Logs Live — User IP Only No Proxy — FAST</h2>
+<p class="small">Shows real client IP extraction, session creation on entry using user IP, forwarding via 7 headers + payload.user, which IP Inception sees (user IP not server IP), every request using user IP, browser shows server URL not infest URL</p>
+<div class="row" style="display:flex;gap:8px;margin:10px 0">
+<button id="refreshBtn" class="primary">↻ Refresh Logs</button>
+<button id="clearBtn">Clear Logs (UI only)</button>
+<span class="small" id="count"></span>
+</div>
+<div class="log-box" id="logBox">Loading logs...</div>
+</div>
+
+<script>
+async function fetchJSON(url){const r=await fetch(url); return r.json();}
+async function refresh(){
+  const j=await fetchJSON('/api/logs?limit=200');
+  document.getElementById('count').textContent=`Count: ${j.count}`;
+  document.getElementById('logBox').textContent=j.logs.map(l=>`[${l.time}] ${l.msg}`).join('\n');
+}
+document.getElementById('refreshBtn').onclick=refresh;
+document.getElementById('clearBtn').onclick=()=>{document.getElementById('logBox').textContent='Logs cleared (UI only, server still has)';};
+window.onload=()=>{refresh(); setInterval(refresh, 3000);};
+</script>
+</body>
+</html>

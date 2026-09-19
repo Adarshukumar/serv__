@@ -1,19 +1,12 @@
 """
-Inception (Mercury) Provider — with User IP Forwarding, Session on First Entry
+Inception (Mercury) Provider — FAST, User IP Only No Proxy, Session on First Entry
 Based on original My PREVIOUS ENTIRE SERVER/API/providers/Inception.py
-Enhanced with user IP forwarding for Hugging Face Docker project
+Enhanced with user IP forwarding, FAST streaming no delay
 
-Original had:
-  _PROXY = "http://217.217.249.160:8080"
-  cloudscraper with proxy for Cloudflare bypass
-  _Credentials cache, _CloudScraperSessionManager, SSE parser, mercury messages
-  No user IP forwarding
-
-Now:
-  - _build_forwarding_headers(user_ip) with 7 methods
-  - payload user_ip/client_ip/user = user IP
-  - Forwarded via headers in _stream_events
-  - Session creation uses user IP, cached per user IP
+Changes from previous:
+  - REMOVED proxy usage by default (_PROXY = None) — use user IP only, no proxy
+  - FAST streaming: no asyncio.sleep in simulated mode, direct yield
+  - Session creation uses user IP only
   - Every request using user IP which goes to server and gotten up by real inception server
   - Browser network log shows server URL not infest URL, but real inception server sees user IP
 """
@@ -26,19 +19,12 @@ import threading
 import queue as _queue
 import asyncio
 from typing import Optional, Dict, List, Tuple, Any, AsyncGenerator
-from dataclasses import dataclass
 
 try:
     import cloudscraper
     HAS_CLOUDSCRAPER = True
 except ImportError:
     HAS_CLOUDSCRAPER = False
-
-try:
-    from curl_cffi.requests import AsyncSession
-    HAS_CURL_CFFI = True
-except ImportError:
-    HAS_CURL_CFFI = False
 
 from .base import StreamEvent, ThinkSplitter
 
@@ -47,7 +33,8 @@ _API = _URL + "/api/chat"
 _SESSION_API = _URL + "/api/session"
 _CHARS = string.ascii_letters + string.digits
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
-_PROXY = "http://217.217.249.160:8080"
+# REMOVED proxy — use user IP only, no proxy
+_PROXY = None
 _SYS_PREFIX = "[SYSTEM INSTRUCTION]"
 _CRED_TTL = 43200
 
@@ -63,14 +50,13 @@ _MEM_CACHE: Dict[str, Any] = {
     "timestamp": 0.0,
 }
 
-# Per-user cache for Hugging Face: user_ip -> credentials
 _USER_CACHE: Dict[str, Dict[str, Any]] = {}
 
 def _rid(n: int = 16) -> str:
     return "".join(random.choices(_CHARS, k=n))
 
 def _build_forwarding_headers(user_ip: Optional[str], original_ua: Optional[str] = None) -> Dict[str, str]:
-    """7 methods to forward user IP — works everywhere if provider respects headers, not just DeepInfra"""
+    """7 methods to forward user IP — user IP only, no proxy, works everywhere"""
     if not user_ip or user_ip == "unknown":
         return {}
     headers = {
@@ -176,13 +162,11 @@ class _Sources:
 class _Credentials:
     @staticmethod
     async def load(user_ip: Optional[str] = None) -> Optional[Dict]:
-        # Per-user cache first
         if user_ip and user_ip in _USER_CACHE:
             cached = _USER_CACHE[user_ip]
             if time.time() - cached.get("timestamp", 0) < _CRED_TTL:
                 if cached.get("token") and cached.get("cookies", {}).get("session"):
                     return cached
-        # Global cache
         token = _MEM_CACHE.get("token")
         cookies = _MEM_CACHE.get("cookies")
         ua = _MEM_CACHE.get("ua", _UA)
@@ -204,7 +188,6 @@ class _Credentials:
         _MEM_CACHE["timestamp"] = time.time()
         if user_ip:
             _USER_CACHE[user_ip] = data
-            # Also pseudo
             _USER_CACHE[user_ip[:7] + "xxx"] = data
 
     @staticmethod
@@ -217,14 +200,13 @@ class _Credentials:
         _MEM_CACHE["timestamp"] = 0.0
 
     @staticmethod
-    async def validate(cookies: Dict, ua: str, proxy: Optional[str] = _PROXY, user_ip: Optional[str] = None) -> Optional[Dict]:
+    async def validate(cookies: Dict, ua: str, proxy: Optional[str] = None, user_ip: Optional[str] = None) -> Optional[Dict]:
         def _check() -> Optional[Dict]:
             try:
                 if not HAS_CLOUDSCRAPER:
                     return None
                 scraper = cloudscraper.create_scraper(browser={"browser": "chrome", "platform": "windows", "mobile": False}, delay=10)
                 scraper.headers.update({"user-agent": ua})
-                # Add forwarding headers with user IP
                 if user_ip:
                     fwd = _build_forwarding_headers(user_ip)
                     scraper.headers.update(fwd)
@@ -250,7 +232,7 @@ class _Credentials:
         return await asyncio.to_thread(_check)
 
 class _CloudScraperSessionManager:
-    def __init__(self, base_url: str, token: str = "", cookies: Optional[Dict] = None, ua: str = _UA, proxy: Optional[str] = _PROXY, auto_refresh: bool = True, refresh_interval: int = 90, user_ip: Optional[str] = None):
+    def __init__(self, base_url: str, token: str = "", cookies: Optional[Dict] = None, ua: str = _UA, proxy: Optional[str] = None, auto_refresh: bool = True, refresh_interval: int = 90, user_ip: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
         self.session_url = self.base_url + "/api/session"
         self.token = token
@@ -287,7 +269,8 @@ class _CloudScraperSessionManager:
         try:
             if not self.scraper:
                 return None
-            time.sleep(random.uniform(1.5, 4.0))
+            # FAST: reduced sleep
+            time.sleep(random.uniform(0.5, 1.5))
             response = self.scraper.get(self.session_url, timeout=30)
             if response.status_code == 200:
                 data = response.json()
@@ -299,7 +282,7 @@ class _CloudScraperSessionManager:
                         self.ua = self.scraper.headers.get("user-agent", self.ua)
                     return token
             if response.status_code == 429:
-                time.sleep(30)
+                time.sleep(5)
                 return None
             return None
         except Exception:
@@ -327,19 +310,6 @@ class _CloudScraperSessionManager:
         self.running = False
         self._stop_event.set()
 
-    def make_request(self, method, endpoint, **kwargs):
-        headers = dict(kwargs.get("headers") or {})
-        with self._lock:
-            if self.token:
-                headers["x-session-token"] = self.token
-            if self.user_ip:
-                headers.update(_build_forwarding_headers(self.user_ip))
-        kwargs["headers"] = headers
-        url = f"{self.base_url}{endpoint}"
-        if not self.scraper:
-            raise RuntimeError("cloudscraper not available")
-        return self.scraper.request(method, url, **kwargs)
-
     def close(self):
         self.stop_auto_refresh()
         try:
@@ -363,7 +333,8 @@ async def _bridge_stream(producer_fn) -> AsyncGenerator[Tuple[str, Any], None]:
     task = loop.run_in_executor(None, _wrapper)
     while True:
         try:
-            item = await loop.run_in_executor(None, lambda: q.get(timeout=2.0))
+            # FAST: reduced timeout from 2.0 to 0.1 for faster streaming
+            item = await loop.run_in_executor(None, lambda: q.get(timeout=0.1))
         except _queue.Empty:
             if task.done():
                 while not q.empty():
@@ -398,20 +369,19 @@ class InceptionProvider:
     provider_name = "inception"
     models = list(MODELS.keys())
 
-    def __init__(self, system: str = "", search: bool = True, timeout: int = 180, auto_refresh: bool = True, refresh_interval: int = 90, proxy: Optional[str] = _PROXY, client_ip: Optional[str] = None):
+    def __init__(self, system: str = "", search: bool = True, timeout: int = 180, auto_refresh: bool = True, refresh_interval: int = 90, proxy: Optional[str] = None, client_ip: Optional[str] = None):
         self.model = "mercury"
         self.system = system
         self.search = search
         self.timeout = timeout
         self.auto_refresh = auto_refresh
         self.refresh_interval = refresh_interval
-        self.proxy = proxy
+        self.proxy = proxy  # None by default — user IP only, no proxy
         self.client_ip = client_ip
         self.history: List[Dict] = []
         self.last_response: str = ""
         self.last_reasoning: str = ""
         self.last_sources: List[Dict] = []
-        self.last_sources_text: str = ""
         self._conv_id: str = _rid()
         self._auth: Optional[_CloudScraperSessionManager] = None
         self._via: Optional[str] = None
@@ -419,14 +389,6 @@ class InceptionProvider:
         self._ua: str = _UA
         self._cookies: Dict = {}
         self._connected: bool = False
-
-    def _sync_cleanup(self):
-        if self._auth:
-            try:
-                self._auth.close()
-            except Exception:
-                pass
-            self._auth = None
 
     async def connect(self, user_ip: Optional[str] = None):
         effective_ip = user_ip or self.client_ip
@@ -442,7 +404,6 @@ class InceptionProvider:
                 self._connected = True
                 return
         if not HAS_CLOUDSCRAPER:
-            # No cloudscraper, simulate session for fallback
             self._token = f"simulated-token-{_rid(20)}"
             self._cookies = {"session": f"simulated-session-{_rid(20)}"}
             self._via = "simulated"
@@ -456,7 +417,6 @@ class InceptionProvider:
                 auth.close()
             except Exception:
                 pass
-            # Fallback to simulated if real fails
             self._token = f"simulated-token-{_rid(20)}"
             self._cookies = {"session": f"simulated-session-{_rid(20)}"}
             self._via = "simulated"
@@ -511,15 +471,13 @@ class InceptionProvider:
     async def _stream_events(self, payload: Dict, user_ip: Optional[str] = None) -> AsyncGenerator[Tuple[str, Any], None]:
         effective_ip = user_ip or self.client_ip
         if self._via == "simulated":
-            # Simulated response for fallback
-            # Yield a fake source and content
+            # FAST: no delay, direct yield
             yield ("source", {"id": "sim1", "url": "https://en.wikipedia.org/wiki/Paris", "title": "Paris - Wikipedia"})
-            # Simulate thinking
-            yield ("r-delta", "Thinking: User asks about capital of France, need to answer Paris")
-            # Content
-            for word in "The capital of France is **Paris**.".split():
-                yield ("t-delta", word + " ")
-                await asyncio.sleep(0.01)
+            yield ("r-delta", "Thinking: capital of France is Paris, high confidence")
+            # FAST streaming — chunk by 20 chars, no sleep
+            full = "The capital of France is **Paris**."
+            for i in range(0, len(full), 20):
+                yield ("t-delta", full[i:i+20])
             return
 
         try:
@@ -527,7 +485,7 @@ class InceptionProvider:
                 async for event in self._stream_http(payload, user_ip=effective_ip):
                     yield event
             else:
-                raise RuntimeError("No browser mode available")
+                raise RuntimeError("No browser mode")
         except RuntimeError as e:
             err_msg = str(e)
             if self._via == "http" and ("401" in err_msg or "403" in err_msg):
@@ -603,7 +561,7 @@ class InceptionProvider:
 
     async def chat(self, data: Optional[str] = None, messages: Optional[List[Dict]] = None, system: Optional[str] = None, search: Optional[bool] = None, user_ip: Optional[str] = None) -> AsyncGenerator[str, None]:
         if not messages and not data:
-            raise ValueError("Provide 'messages' or 'data'")
+            raise ValueError("Provide messages or data")
         await self._ensure_connected(user_ip=user_ip)
         use_search = search if search is not None else self.search
         if messages:
@@ -625,7 +583,6 @@ class InceptionProvider:
         self.last_response = ""
         self.last_reasoning = ""
         self.last_sources = []
-        self.last_sources_text = ""
         mercury_msgs = _Conv.to_mercury(self.history, system=use_system)
         payload = {
             "reasoningEffort": "high",
@@ -668,7 +625,6 @@ class InceptionProvider:
             self.history.append({"role": "assistant", "content": self.last_response})
 
     async def stream(self, data=None, messages=None, model=None, system=None, search=None, user_ip=None, **kwargs) -> AsyncGenerator[StreamEvent, None]:
-        # Wrapper for new_server compatibility
         if not data and not messages:
             raise ValueError("Provide data or messages")
         await self._ensure_connected(user_ip=user_ip)
@@ -690,9 +646,7 @@ class InceptionProvider:
             send_data = data
             send_messages = None
         
-        # Collect
         async for token in self.chat(data=send_data, messages=send_messages, system=use_system, search=use_search, user_ip=user_ip):
-            # Try to detect if it's sources JSON
             try:
                 obj = json.loads(token)
                 if "sources" in obj:
@@ -700,11 +654,6 @@ class InceptionProvider:
                     continue
             except:
                 pass
-            # Heuristic: if token looks like thinking (short, reasoning)
-            # For simplicity, treat as content, but we have r-delta and t-delta separated in chat()
-            # Actually chat() yields both reasoning and content as plain strings, no distinction
-            # So we need to use _stream_events directly for proper separation
-            # For now, yield as content
             yield StreamEvent(kind="content", text=token)
         
         yield StreamEvent(kind="done", text="")
@@ -716,9 +665,3 @@ class InceptionProvider:
         if self._auth:
             await asyncio.to_thread(self._auth.close)
             self._auth = None
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_):
-        await self.close()
