@@ -1,0 +1,18 @@
+{
+  "name": "adu-headless-user-ip-forward-experimental",
+  "version": "3.0.0",
+  "description": "Experimental User IP Forwarding to DeepInfra — Node.js version, Python+npm together research",
+  "main": "user_ip_forward.js",
+  "scripts": {
+    "test": "node user_ip_forward.js --user-ip 1.2.3.4 --prompt \"Hi in one word\"",
+    "test:france": "node user_ip_forward.js --user-ip 8.8.8.8 --prompt \"What is capital of France?\"",
+    "start": "node user_ip_forward.js"
+  },
+  "keywords": ["user-ip", "forwarding", "deepinfra", "experimental", "adu-headless"],
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

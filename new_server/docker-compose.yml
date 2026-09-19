@@ -1,0 +1,22 @@
+version: "3.8"
+services:
+  adu-headless-v2:
+    build: .
+    ports:
+      - "7860:7860"
+    environment:
+      - SERVER_MAX_CONCURRENCY=64
+      - SESSION_SHARDS=32
+      - PROVIDER_CONCURRENCY=10
+      - RAGSRV_CONCURRENCY=50
+      - IP_RPM=60
+      - GLOBAL_RPM=1000
+      - DEFAULT_PROVIDER=ragsrv
+      - DEFAULT_MODEL=luna
+      - RAGSRV_UPSTREAM_BASE=
+      - CF_ACCOUNT_ID=
+      - CF_API_TOKEN=
+    volumes:
+      - ./app:/app/app
+      - ./ui:/app/ui
+    restart: unless-stopped
