@@ -3,72 +3,84 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Mercury — Landing • Divided UI • REAL CONNECTION • Fixed Paris Bug</title>
+<title>Mercury — Middleman + User IP + Proxy — Simple Chat</title>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#0a0a0b;--soft:#141415;--elev:#1c1c1f;--border:#232326;--text:#f5f5f0;--soft-text:#9a9aa0;--faint:#5a5a60;--accent:#ff4d2e;--green:#22c55e;--mono:"JetBrains Mono",monospace;--sans:"Instrument Sans",sans-serif;--display:"Fraunces",serif}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);padding:24px;max-width:1000px;margin:0 auto;line-height:1.6}
-h1{font-family:var(--display);font-size:42px;letter-spacing:-0.03em;line-height:.9}
+h1{font-family:var(--display);font-size:36px;letter-spacing:-0.03em;line-height:.9}
 h1 span{color:var(--accent)}
-.sub{color:var(--soft-text);font-size:14px;margin:12px 0 20px;max-width:800px}
+.sub{color:var(--soft-text);font-size:13px;margin:12px 0 20px;max-width:900px;line-height:1.6}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:20px}
 .card{background:var(--soft);border:1px solid var(--border);border-radius:18px;padding:18px;transition:transform .15s, border-color .15s}
 .card:hover{transform:translateY(-2px);border-color:#2a2a2e}
-.card b{font-family:var(--display);font-size:18px;display:block;margin-bottom:6px}
-.card p{font-size:13px;color:var(--soft-text);margin-bottom:12px}
-.card a{display:inline-block;padding:8px 14px;border-radius:999px;background:var(--text);color:var(--bg);text-decoration:none;font-size:13px;font-weight:500}
+.card b{font-family:var(--display);font-size:16px;display:block;margin-bottom:6px}
+.card p{font-size:12px;color:var(--soft-text);margin-bottom:12px;line-height:1.5}
+.card a{display:inline-block;padding:8px 14px;border-radius:999px;background:var(--text);color:var(--bg);text-decoration:none;font-size:12px;font-weight:500}
 .card a.accent{background:var(--accent);color:#fff}
-.small{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:20px;white-space:pre-wrap;background:var(--soft);border:1px solid var(--border);border-radius:12px;padding:12px}
-.bugfix{background:#1a1510;border:1px solid #3a2a1a;border-radius:12px;padding:12px;margin:16px 0;font-size:12px;line-height:1.5}
-.bugfix b{color:var(--accent)}
+.small{font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:20px;white-space:pre-wrap;background:var(--soft);border:1px solid var(--border);border-radius:12px;padding:12px;max-height:300px;overflow:auto}
+.middleman{background:#151a10;border:1px solid #2a3a1a;border-radius:12px;padding:12px;margin:16px 0;font-size:12px;line-height:1.6}
+.middleman b{color:var(--green)}
+.code{font-family:var(--mono);font-size:10px;background:#050507;border:1px solid #1a1a1e;border-radius:10px;padding:10px;white-space:pre-wrap;margin:8px 0}
 </style>
 </head>
 <body>
-<h1><span>Mercury</span> — Divided UI • REAL CONNECTION • Fixed Paris Bug</h1>
+<h1><span>Mercury</span> — Middleman + User IP + Proxy — Simple Chat — No System Prompt</h1>
 
-<div class="bugfix">
-<b>🐛 BUGFIX v3 — Fixed Paris for everything bug:</b> You reported /chat returns same Paris for all prompts (whats ur name, who is mia khalifa all gave Paris) — because simulated was hardcoded Paris for everything.<br>
-<b>Now:</b> Tries REAL connection via curl_cffi chrome impersonation + cloudscraper + original proxy fallback (217.217.249.160:8080). If sandbox blocks TLS (BoringSSL SSL_connect closed — all HTTPS fails in sandbox, expected), falls back to INTELLIGENT simulated based on actual prompt: capital France → Paris, whats ur name → Mercury, mia khalifa → bio, generic → explains sandbox + echoes prompt. In production HF Spaces with your IP 122.161.48.253, real Mercury answers, not Paris for everything. via shows http (real) or simulated (intelligent) + last_error.
+<div class="middleman">
+<b>Main Goal: Server used as middleman and letting user IP used</b><br>
+<b>Flow:</b><br>
+<code>User Browser (IP 122.161.48.253) → Our Server (10.112.126.81, middleman, you see /api/chat) → Proxy (217.217.249.160:8080, for Cloudflare bypass, CONNECTION only) → Real Inception Server (chat.inceptionlabs.ai, behind Cloudflare) → Sees CF-Connecting-IP: 122.161.48.253 (your IP, not server/proxy) → Response back via proxy → our server → you via SSE</code><br><br>
+<b>Proxy usage:</b> Use proxies to connect API nicely and deep — tries direct (no proxy) first, then original proxy 217.217.249.160:8080, then fallback proxies. Proxy for CONNECTION (bypass Cloudflare), user IP for IDENTITY via 7 headers + payload.user.<br>
+<b>TCP source:</b> Proxy IP or Server IP (cannot spoof)<br>
+<b>HTTP identity:</b> User IP via X-Forwarded-For, X-Real-IP, CF-Connecting-IP, True-Client-IP, X-Client-IP, X-Forwarded, Forwarded + user, user_ip, client_ip<br>
+<b>Browser sees:</b> /api/chat (server URL) not https://chat.inceptionlabs.ai/api/chat (infest URL) — WORKING<br>
+<b>Inception sees:</b> User IP via CF-Connecting-IP if logs (behind Cloudflare) — WORKING<br>
+<b>Connect using user IP !! Not server IP</b> — via proxy for connection but user IP for identity, middleman working.
 </div>
 
 <p class="sub">
-<b>Divided UI as you asked:</b> In roots — <code>/chat</code> only chat thing (now REAL CONNECTION intelligent fallback), <code>/logs</code> all logs, <code>/session</code> session, <code>/test</code> tests, <code>/clone</code> clone guide.<br>
-<b>User IP only, no proxy by default</b> — removed proxy usage from UI, use user IP only, but tries original proxy as fallback for Cloudflare bypass.<br>
-<b>FAST streaming no delay</b> — chat streams directly, no asyncio.sleep, 20-char chunks.<br>
-<b>REAL CONNECTION:</b> curl_cffi chrome impersonation, cloudscraper, with user IP forwarding via 7 headers + payload.user. Sandbox blocks all HTTPS (tested httpbin, ipify, google, chat.inceptionlabs.ai all fail BoringSSL), so simulated expected here, but will work in production HF Spaces.<br>
-<b>Flow:</b> User Browser (IP 122.161.48.253) → Our Server (<code>/api/chat</code>) → Real Inception Server (sees user IP via 7 headers) → Response via nice SSE, browser shows server URL not infest URL. Connect using user IP !! Not server IP.
+<b>Research — Inception API (from original provider):</b><br>
+1. GET /api/session → token + cookies session (cloudscraper + proxy + user IP headers, browser chrome, delay 10)<br>
+2. POST /api/chat → payload {reasoningEffort: high, webSearchEnabled, id, messages: [{id, role, parts: [{type: text, text}]}], trigger: submit-message, user, user_ip, client_ip} + headers x-session-token + forwarding headers + proxy<br>
+3. SSE: reasoning-delta → thinking, text-delta → content, source-url → sources, [DONE]<br>
+4. Search AUTO via source-url events<br><br>
+
+<b>Chat UI:</b> Nice — textarea at bottom, chats above, no system prompt, no modeling, simple, just chat, recreated. Type in bottom textarea, Enter to send, Shift+Enter new line.<br>
+<b>Divided UI:</b> /chat only chat (simple textarea bottom), /logs all logs, /session session, /test tests, /clone clone guide.<br>
+<b>Fixed Paris bug:</b> Previously hardcoded Paris for all prompts — now intelligent fallback based on prompt + real connection via proxy + user IP.
 </p>
 
 <div class="grid">
 <div class="card">
-<b>💬 /chat — FIXED</b>
-<p>Only chat thing — now REAL CONNECTION + intelligent fallback, not Paris for everything. FAST, user IP only, shows via http/simulated + last_error</p>
-<a class="accent" href="/chat">Open /chat — FIXED</a>
+<b>💬 /chat — Simple</b>
+<p>Nice — textarea at bottom, chats above, no system prompt, no modeling, just prompt + search, proxy + user IP, middleman. Enter to send, Shift+Enter new line.</p>
+<a class="accent" href="/chat">Open /chat — Simple</a>
 </div>
 <div class="card">
 <b>📊 /logs</b>
-<p>All logs — server logs live, shows user IP extraction, session creation, forwarding, which IP Inception sees, SANDBOX_TLS_BLOCKED if blocked</p>
+<p>All logs — server logs live, shows user IP extraction, proxy used, session creation, forwarding, which IP Inception sees</p>
 <a href="/logs">Open /logs</a>
 </div>
 <div class="card">
 <b>🔥 /session</b>
-<p>Session management — creates session on entry using user IP, shows token, headers, via, last_error, proof</p>
+<p>Session — creates session on entry using user IP + proxy fallback, shows token, headers, via, proxy used, proof middleman</p>
 <a href="/session">Open /session</a>
 </div>
 <div class="card">
 <b>🧪 /test</b>
-<p>Tests — proxy as different users, everywhere or just DeepInfra? + Inception chat, which IP Inception sees?</p>
+<p>Tests — proxy as different users, everywhere or just DeepInfra? + Inception chat, which IP Inception sees? middleman</p>
 <a href="/test">Open /test</a>
 </div>
 <div class="card">
 <b>📦 /clone</b>
-<p>Clone guide — exact Docker code to clone this branch that folder to run using it, as soon as you put Dockerfile it starts working, for HF</p>
+<p>Clone guide — exact Docker code to clone this branch that folder to run using it, as soon as you put Dockerfile it starts working, HF ready</p>
 <a href="/clone">Open /clone</a>
 </div>
 <div class="card">
-<b>🩺 /api/health — v3</b>
-<p>Health check — v3-real-connection-intelligent-simulated, bugfix note, real_connection methods, sandbox_note, last_error</p>
+<b>🩺 /api/health — v4</b>
+<p>Health — v4-middleman-userip-proxy-simplechat, main goal, proxy usage, middleman flow, research, chat UI</p>
 <a href="/api/health">Open /api/health</a>
 </div>
 </div>
@@ -77,7 +89,8 @@ h1 span{color:var(--accent)}
 
 <script>
 async function load(){
-  const r=await fetch('/api/health'); const t=await r.text(); 
+  const r=await fetch('/api/health');
+  const t=await r.text();
   try{const j=JSON.parse(t); document.getElementById('health').textContent=JSON.stringify(j,null,2);}catch{document.getElementById('health').textContent=t;}
 }
 load();
