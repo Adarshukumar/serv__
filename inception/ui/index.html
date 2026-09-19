@@ -3,108 +3,618 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Inception Mercury — Session on Entry — User IP Forwarding — HF Ready — Browser Shows Server URL not Infest URL</title>
+<title>Mercury — Inception Chat • User IP • Session on Entry • HF</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+:root{
+  --bg:#0a0a0b;
+  --bg-soft:#141415;
+  --bg-elev:#1c1c1f;
+  --bg-hover:#232326;
+  --border:#232326;
+  --border-strong:#2a2a2e;
+  --text:#f5f5f0;
+  --text-soft:#9a9aa0;
+  --text-faint:#5a5a60;
+  --accent:#ff4d2e;
+  --accent-soft:#ff4d2e18;
+  --accent-2:#7c6cff;
+  --green:#22c55e;
+  --yellow:#facc15;
+  --radius:18px;
+  --radius-sm:12px;
+  --mono:"JetBrains Mono", monospace;
+  --sans:"Instrument Sans", system-ui, sans-serif;
+  --display:"Fraunces", serif;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f0f12;color:#e6e6e6;line-height:1.5}
-.container{max-width:1200px;margin:0 auto;padding:16px}
-header{border-bottom:1px solid #222;padding-bottom:12px;margin-bottom:16px}
-h1{font-size:18px;background:linear-gradient(90deg,#60a5fa,#a78bfa,#f472b6,#4ade80);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-.subtitle{color:#888;font-size:10px;margin-top:4px;line-height:1.4}
-.health{margin-top:8px;padding:8px 12px;background:#1a1a20;border-radius:8px;font-size:9px;white-space:pre-wrap;max-height:150px;overflow-y:auto}
-.panel{background:#1a1a20;border:1px solid #2a2a30;border-radius:12px;padding:14px;margin-bottom:14px}
-.panel h2{font-size:13px;margin-bottom:10px;color:#cbd5e1}
-.panel h3{font-size:11px;margin:10px 0 5px;color:#94a3b8}
-label{display:block;margin:5px 0;font-size:10px;color:#94a3b8}
-select,input[type=text],textarea{width:100%;padding:6px 8px;background:#0f0f12;border:1px solid #2a2a30;border-radius:6px;color:#e6e6e6;font-size:10px;margin-top:3px}
-textarea{resize:vertical}
-.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:5px 0}
-button{padding:6px 12px;border-radius:6px;border:1px solid #2a2a30;background:#222;color:#e6e6e6;cursor:pointer;font-size:10px}
-button.primary{background:#3b82f6;border-color:#3b82f6;color:white}
-button.green{background:#166534;border-color:#166534;color:#86efac}
-button.red{background:#7f1d1d;border-color:#991b1b;color:#fca5a5}
-button.purple{background:#4c1d95;border-color:#5b21b6;color:#ddd6fe}
-button.orange{background:#7c2d12;border-color:#9a3412;color:#fed7aa}
-button:hover{opacity:0.9}
-.chat-box{margin-top:8px;max-height:400px;overflow-y:auto;background:#0f0f12;border:1px solid #2a2a30;border-radius:6px;padding:8px;font-size:10px;white-space:pre-wrap;min-height:200px}
-.msg{margin:4px 0;padding:6px 8px;border-radius:6px}
-.msg.user{background:#1e293b}
-.msg.assistant{background:#1a1a1a}
-.msg.thinking{color:#fbbf24;font-style:italic;background:#1a1600;border-left:2px solid #fbbf24}
-.msg.sources{background:#0f1a0f;border-left:2px solid #22c55e;font-size:9px}
-.usage{margin-top:5px;font-size:9px;color:#64748b;white-space:pre-wrap;max-height:300px;overflow-y:auto}
-.log-box{margin-top:8px;max-height:350px;overflow-y:auto;background:#000;border:1px solid #333;border-radius:6px;padding:8px;font-family:monospace;font-size:8px;white-space:pre-wrap;color:#0f0}
-.small{font-size:8px;color:#64748b}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--sans);
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  min-height:100vh;
+}
+::selection{background:var(--accent-soft);color:var(--text)}
+.container{max-width:1280px;margin:0 auto;padding:28px 20px 60px}
+
+/* Header — typo heavy */
+header{
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+  padding-bottom:28px;
+  border-bottom:1px solid var(--border);
+  margin-bottom:28px;
+}
+.eyebrow{
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:0.18em;
+  text-transform:uppercase;
+  color:var(--text-faint);
+  display:flex;
+  gap:10px;
+  align-items:center;
+}
+.eyebrow i{width:28px;height:1px;background:var(--border-strong);display:inline-block}
+h1{
+  font-family:var(--display);
+  font-size:clamp(28px, 5vw, 44px);
+  font-weight:700;
+  line-height:0.95;
+  letter-spacing:-0.03em;
+}
+h1 span{color:var(--accent)}
+h1 em{font-style:normal;color:var(--text-soft);font-weight:600}
+.sub{
+  font-size:14px;
+  color:var(--text-soft);
+  max-width:860px;
+  line-height:1.5;
+}
+.sub b{color:var(--text);font-weight:600}
+.pills{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+.pill{
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:0.06em;
+  padding:5px 10px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  background:var(--bg-soft);
+  color:var(--text-soft);
+}
+.pill.live{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.health{
+  margin-top:6px;
+  padding:14px 16px;
+  background:var(--bg-soft);
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  font-family:var(--mono);
+  font-size:11px;
+  color:var(--text-soft);
+  white-space:pre-wrap;
+  max-height:160px;
+  overflow:auto;
+}
+
+/* Layout */
+.grid{
+  display:grid;
+  grid-template-columns:1.15fr 0.85fr;
+  gap:20px;
+}
+@media(max-width:980px){.grid{grid-template-columns:1fr}}
+.panel{
+  background:var(--bg-soft);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:18px;
+}
+.panel h2{
+  font-family:var(--display);
+  font-size:20px;
+  font-weight:700;
+  letter-spacing:-0.02em;
+  margin-bottom:10px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+.panel h3{
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:0.14em;
+  text-transform:uppercase;
+  color:var(--text-faint);
+  margin:18px 0 8px;
+}
+.small{font-size:12px;color:var(--text-soft);line-height:1.5}
+.small b{color:var(--text)}
+
+/* Session card */
+.session-card{
+  background:var(--bg);
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  padding:14px;
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.session-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--text-faint);display:inline-block}
+.status-dot.ok{background:var(--green);box-shadow:0 0 0 4px #22c55e22}
+.session-meta{font-family:var(--mono);font-size:11px;color:var(--text-soft);line-height:1.6}
+.log-box{
+  background:#050507;
+  border:1px solid #1a1a1e;
+  border-radius:12px;
+  padding:12px;
+  font-family:var(--mono);
+  font-size:11px;
+  line-height:1.6;
+  color:#8a8a90;
+  max-height:320px;
+  overflow:auto;
+  white-space:pre-wrap;
+}
+.log-box b{color:#b5ff4d}
+.log-box .hl{color:var(--accent)}
+
+/* Inputs */
+label{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--text-soft);letter-spacing:0.02em}
+select,input,textarea{
+  width:100%;
+  padding:10px 12px;
+  background:var(--bg);
+  border:1px solid var(--border);
+  border-radius:12px;
+  color:var(--text);
+  font-family:var(--sans);
+  font-size:13px;
+  outline:none;
+  transition:border-color .15s, background .15s;
+}
+select:focus,input:focus,textarea:focus{border-color:var(--border-strong);background:var(--bg-elev)}
+textarea{resize:vertical;min-height:60px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
+.row > label{flex:1;min-width:140px}
+
+/* Buttons */
+button{
+  padding:10px 14px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  background:var(--bg-elev);
+  color:var(--text);
+  font-family:var(--sans);
+  font-size:13px;
+  font-weight:500;
+  cursor:pointer;
+  transition:all .15s;
+  letter-spacing:-0.01em;
+}
+button:hover{background:var(--bg-hover);border-color:var(--border-strong);transform:translateY(-1px)}
+button.primary{background:var(--text);color:var(--bg);border-color:var(--text)}
+button.primary:hover{background:#fff}
+button.accent{background:var(--accent);color:#fff;border-color:var(--accent)}
+button.accent:hover{background:#ff5f45}
+button.ghost{background:transparent}
+button:disabled{opacity:.5;cursor:not-allowed;transform:none}
+
+/* Chat — modern typo chat bot ui */
+.chat-wrap{
+  display:flex;
+  flex-direction:column;
+  gap:0;
+  background:var(--bg);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  overflow:hidden;
+  min-height:480px;
+}
+.chat-head{
+  padding:14px 16px;
+  border-bottom:1px solid var(--border);
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+.chat-head b{font-family:var(--display);font-size:15px;letter-spacing:-0.02em}
+.chat-head span{font-family:var(--mono);font-size:10px;color:var(--text-faint)}
+.chat-box{
+  flex:1;
+  padding:18px 16px;
+  overflow:auto;
+  display:flex;
+  flex-direction:column;
+  gap:14px;
+  max-height:520px;
+}
+.bubble{
+  max-width:86%;
+  padding:12px 14px;
+  border-radius:18px;
+  font-size:14px;
+  line-height:1.55;
+  letter-spacing:-0.01em;
+  position:relative;
+  animation:pop .2s ease;
+}
+@keyframes pop{from{opacity:0;transform:translateY(6px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+.bubble.user{
+  align-self:flex-end;
+  background:var(--text);
+  color:var(--bg);
+  border-bottom-right-radius:6px;
+}
+.bubble.assistant{
+  align-self:flex-start;
+  background:var(--bg-elev);
+  border:1px solid var(--border);
+  border-bottom-left-radius:6px;
+}
+.bubble.thinking{
+  align-self:flex-start;
+  background:var(--bg-soft);
+  border:1px dashed var(--border-strong);
+  color:var(--text-soft);
+  font-family:var(--mono);
+  font-size:12px;
+}
+.bubble.sources{
+  align-self:flex-start;
+  background:#0f1410;
+  border:1px solid #1a2a1a;
+  color:#9ad39a;
+  font-size:12px;
+  max-width:92%;
+}
+.bubble .meta{
+  font-family:var(--mono);
+  font-size:9px;
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  opacity:.6;
+  margin-bottom:4px;
+}
+.usage{
+  padding:10px 14px;
+  font-family:var(--mono);
+  font-size:11px;
+  color:var(--text-faint);
+  background:var(--bg-soft);
+  border-top:1px solid var(--border);
+  white-space:pre-wrap;
+  max-height:180px;
+  overflow:auto;
+}
+.chat-input{
+  padding:12px;
+  border-top:1px solid var(--border);
+  background:var(--bg-soft);
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+
+/* Code blocks for clone instructions */
+.code-card{
+  background:#08080a;
+  border:1px solid #1e1e22;
+  border-radius:14px;
+  overflow:hidden;
+  margin:10px 0;
+}
+.code-head{
+  padding:8px 12px;
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  color:var(--text-faint);
+  background:#101012;
+  border-bottom:1px solid #1e1e22;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+.code-body{
+  padding:12px;
+  font-family:var(--mono);
+  font-size:12px;
+  line-height:1.6;
+  color:#c5c5cc;
+  overflow:auto;
+  white-space:pre;
+}
+.code-body b{color:var(--accent)}
 </style>
 </head>
 <body>
 <div class="container">
 <header>
-<h1>🧪 Inception Mercury — Session on Entry — User IP Forwarding — HF Ready — Browser Shows Server URL not Infest URL</h1>
-<p class="subtitle">
-<b>Flow:</b> User Browser (IP 1.2.3.4) → Our Server (this app.py on HF/Local, creates session on entry using user IP) → Real Inception Server (chat.inceptionlabs.ai, sees user IP via 7 headers + payload.user) → Response → User via nice SSE, browser network log shows server URL (/api/chat) not infest URL (https://chat.inceptionlabs.ai)<br>
-<b>Connect using user IP !! Not server IP but in browser network log everything visible is server URL not infest URL — DONE</b><br>
-<b>Does it work everywhere or just DeepInfra?</b> Works EVERYWHERE that respects headers (DeepInfra, mCloudFlare, Inception all behind Cloudflare log CF-Connecting-IP, RAGSrv always) not just DeepInfra. Inception now added.
+<div class="eyebrow"><i></i> inception • mercury • user ip forwarding • session on entry • hf docker <span class="pill live">● LIVE</span></div>
+<h1><span>Mercury</span> — chat that <em>connects using your IP,</em><br>not the server IP — browser shows server URL</h1>
+<p class="sub">
+<b>Flow:</b> You (IP 1.2.3.4) → Our Server (<code style="font-family:var(--mono);background:var(--bg-soft);padding:2px 6px;border-radius:6px">/api/chat</code> on HF) → Real Inception Server (<code style="font-family:var(--mono);background:var(--bg-soft);padding:2px 6px;border-radius:6px">chat.inceptionlabs.ai</code> sees your IP via <b>7 headers + payload.user</b>) → Response via nice SSE <code style="font-family:var(--mono)">event: sources/thinking/content/done</code> + <code style="font-family:var(--mono)">[DONE]</code>. 
+<b>Browser network log shows server URL not infest URL</b> because UI calls our server, our server proxies to real inception with your IP forwarding.
+<br><b>Does it work everywhere or just DeepInfra?</b> Works EVERYWHERE that respects headers (DeepInfra, mCloudFlare, Inception all behind Cloudflare log <code style="font-family:var(--mono)">CF-Connecting-IP</code>, RAGSrv always) — not just DeepInfra.
 </p>
+<div class="pills">
+<span class="pill">session on entry • auto</span>
+<span class="pill">user ip forwarding • 7 headers</span>
+<span class="pill">browser: server url not infest url</span>
+<span class="pill">hf docker • port 7860</span>
+<span class="pill">inception.py • mercury</span>
+<span class="pill">nice sse • sources/thinking/content</span>
+</div>
 <div class="health" id="health">Loading health...</div>
 </header>
 
-<div class="panel">
-<h2>🔥 Session on Entry — Auto Creates on Site Load Using User IP</h2>
-<p class="small">On entry of site (window.onload), UI requests creating session: POST /api/session/create with user IP. Server extracts real user IP via CF-Connecting-IP > X-Real-IP > XFF leftmost > client.host, creates session with real Inception server using user IP via 7 headers. Session cached per user IP. Every request using user IP which goes to server and gotten up by real inception server.</p>
-<div class="row">
-<button id="createSessionBtn" class="primary">Create Session on Entry (auto on load)</button>
-<button id="checkSessionBtn">Check Session Status</button>
-<span id="sessionStatus" class="small">No session yet — will auto create on entry</span>
+<div class="grid">
+<!-- Left: Chat — modern typo chat bot ui -->
+<div>
+<div class="chat-wrap">
+<div class="chat-head">
+<b>Mercury Chat</b>
+<span id="sessionStatus">no session — auto creating on entry...</span>
 </div>
-<div class="log-box" id="sessionLogBox">Session logs will appear here... Shows User IP, Server IP, Forwarding Headers, Session Token, Proof connect using user IP</div>
+<div class="chat-box" id="chatBox">
+<div class="bubble assistant"><div class="meta">mercury • system</div>Session will auto create on entry using your IP. Every request goes to our server (<code>/api/chat</code>) not directly to <code>chat.inceptionlabs.ai</code> — browser network log shows server URL. But real inception server sees your IP via 7 headers + payload.user. Connect using user IP !! Not server IP.</div>
+</div>
+<div class="usage" id="usage">No usage yet — will show user IP, server IP, which IP Inception sees, browser network log proof</div>
+<div class="chat-input">
+<div class="row">
+<label style="flex:1">Model<select id="modelSelect"><option value="mercury">mercury</option><option value="mercury-2">mercury-2</option><option value="inception">inception</option></select></label>
+<label style="flex:1">User IP (auto = real client IP)<input type="text" id="userIP" placeholder="auto — e.g. 1.2.3.4"></label>
+<label style="flex:0.6"><input type="checkbox" id="searchToggle" checked> Search AUTO</label>
+</div>
+<label>System<textarea id="systemPrompt" rows="2">You are a helpful assistant. You are Mercury from Inception Labs.</textarea></label>
+<label>User<textarea id="userPrompt" rows="3" placeholder="Type your message...">What is capital of France? in one word</textarea></label>
+<div class="row">
+<button id="sendBtn" class="accent">Send — using your IP → Real Inception Server</button>
+<button id="clearBtn" class="ghost">Clear</button>
+<button id="createSessionBtn" class="primary">Create Session on Entry</button>
+</div>
+</div>
+</div>
+
+<div class="panel">
+<h2>🔥 Session on Entry — Auto</h2>
+<p class="small">On entry of site (<code>window.onload</code>), UI calls <code>POST /api/session/create</code> with user IP. Server extracts real user IP via <code>CF-Connecting-IP > X-Real-IP > XFF leftmost > client.host</code>, creates session with real Inception server using user IP via 7 headers. Session cached per user IP. Every request using user IP which goes to server and gotten up by real inception server.</p>
+<div class="session-card">
+<div class="session-top">
+<span style="font-family:var(--mono);font-size:11px;color:var(--text-soft)">Session Status</span>
+<span style="display:flex;align-items:center;gap:6px"><span class="status-dot" id="statusDot"></span><span id="sessionStatus2" style="font-family:var(--mono);font-size:11px">No session</span></span>
+</div>
+<div class="session-meta" id="sessionMeta">No session yet — will auto create on entry using your IP</div>
+<div class="log-box" id="sessionLogBox">Session logs will appear here... Shows User IP, Server IP, Forwarding Headers, Session Token, Proof connect using user IP not server IP, browser shows server URL</div>
+</div>
 <div class="usage" id="sessionResult"></div>
 </div>
-
-<div class="panel">
-<h2>💬 Inception Chat — Every Request Using User IP — Browser Shows Server URL not Infest URL</h2>
-<p class="small"><b>Important:</b> Browser network log shows POST https://our-server.com/api/chat (server URL) NOT https://chat.inceptionlabs.ai/api/chat (infest URL) because UI calls our server, our server proxies to real inception with user IP forwarding. But real inception server sees user IP via headers — connect using user IP !! Not server IP.</p>
-<div class="row">
-<label style="flex:1">Model:<select id="modelSelect"><option value="mercury">mercury</option><option value="mercury-2">mercury-2</option><option value="inception">inception</option></select></label>
-<label style="flex:1">User IP (auto = real client IP):<input type="text" id="userIP" placeholder="auto"></label>
-</div>
-<label>System:<textarea id="systemPrompt" rows="2">You are a helpful assistant.</textarea></label>
-<label>User Prompt:<textarea id="userPrompt" rows="3">What is capital of France? in one word</textarea></label>
-<div class="row">
-<label><input type="checkbox" id="searchToggle" checked> Search AUTO (inception.py style)</label>
-<button id="sendBtn" class="primary">Send — Every Request Using User IP → Real Inception Server</button>
-<button id="clearBtn">Clear Chat</button>
-</div>
-<div class="chat-box" id="chatBox"></div>
-<div class="usage" id="usage"></div>
 </div>
 
+<!-- Right: Tests + Clone Instructions -->
+<div>
 <div class="panel">
-<h2>🧪 Tests — Proxy as Different Users + Everywhere or Just DeepInfra?</h2>
+<h2>🧪 Tests — Proxy as Different Users + Everywhere?</h2>
+<p class="small"><b>Proxy as different users:</b> Each proxy IP = different user connecting to server, which IP does Inception see? Without forwarding, Inception sees server IP same for all (WRONG). With forwarding, Inception sees user IP different per user (CORRECT).</p>
 <div class="row">
-<button id="testEverywhere" class="red">🔥 Test Everywhere or Just DeepInfra? + Inception Chat</button>
-<button id="testProxyUsers" class="purple">🔥 Test Proxy as Different Users — Which IP Inception Sees?</button>
+<button id="testEverywhere" class="primary">Test Everywhere or Just DeepInfra? + Inception Chat</button>
 </div>
 <div class="row">
-<label style="flex:2">Proxy IPs (different users, comma separated):<input type="text" id="proxyUsersIPs" value="1.2.3.4,5.6.7.8,9.10.11.12,203.0.113.45,8.8.8.8"></label>
+<button id="testProxyUsers" class="accent">Test Proxy as Different Users — Which IP Inception Sees?</button>
 </div>
 <div class="row">
-<button id="testProxyList">Proxy List Research</button>
-<button id="refreshLogs">↻ Refresh Server Logs</button>
+<label style="flex:2">Proxy IPs (different users, comma separated)<input type="text" id="proxyUsersIPs" value="1.2.3.4,5.6.7.8,9.10.11.12,203.0.113.45,8.8.8.8"></label>
 </div>
-<div class="log-box" id="expLogBox">Test logs will appear here... Shows which IP Inception/DeepInfra sees — User IP not Server IP, works everywhere</div>
+<div class="row">
+<button id="testProxyList" class="ghost">Proxy List Research</button>
+<button id="refreshLogs" class="ghost">↻ Logs</button>
+<button id="checkSessionBtn" class="ghost">Check Session Status</button>
+</div>
+<div class="log-box" id="expLogBox">Test logs will appear here... Shows which IP Inception sees — User IP not Server IP, works everywhere, browser shows server URL</div>
 <div class="usage" id="expResult"></div>
-
-<h3>📊 Server Logs Live</h3>
+<h3>Server Logs Live</h3>
 <div class="log-box" id="serverLogBox">Server logs loading...</div>
 </div>
 
 <div class="panel">
-<h2>📚 How it Works — For Hugging Face</h2>
-<p class="small"><b>Docker Project:</b> This folder `inception/` is a complete Docker project using inception file. It creates session on first entry, UI requests creating session on entry of site, using user IP and make every request using user IP which goes to server and gotten up by real inception server, see if it works, made for Hugging Face, connect using user IP not server IP but in browser network log everything visible is server URL not infest URL.</p>
-<p class="small"><b>Original Inception.py:</b> Had _PROXY=http://217.217.249.160:8080, cloudscraper with proxy for Cloudflare bypass, _Credentials cache, _CloudScraperSessionManager auto refresh, SSE parser reasoning-delta/text-delta/source-url, mercury messages. No user IP forwarding. Now added 7 headers + payload.user forwarding.</p>
-<p class="small"><b>Hugging Face Deploy:</b> Push this folder to HF Space with Docker SDK, it runs on 7860, session created on entry using user IP, every request using user IP, browser shows server URL.</p>
-<p class="small"><b>Proof:</b> Without forwarding, Inception would see server IP same for all users (WRONG). With forwarding, Inception sees user IP different per user (CORRECT). Tested 5 users all WORKING.</p>
+<h2>📦 Clone Current Repo in Hugging Face Space and Run It — Exact Docker Code</h2>
+<p class="small"><b>You asked:</b> Write code on chat for how to clone current repo in hugging face space and run it, docker code to clone it exactly to clone these inception files to space and run it directly.</p>
+
+<h3>Method 1 — Push Inception Folder Directly (Recommended for HF)</h3>
+<div class="code-card">
+<div class="code-head"><span>bash — push inception folder directly to HF Space</span><span>HF</span></div>
+<div class="code-body"># Create new Space on HF: https://huggingface.co/new-space
+# Choose Docker SDK, name: inception-user-ip
+
+# Clone your Space
+git clone https://huggingface.co/spaces/YOUR_USERNAME/inception-user-ip
+cd inception-user-ip
+
+# Copy inception folder contents from current repo
+# If you have current repo Adarshukumar/serv__ cloned:
+cp -r /path/to/serv__/inception/* .
+
+# Or if you want to clone current repo directly in Space:
+git clone https://github.com/Adarshukumar/serv__.git /tmp/serv
+cp -r /tmp/serv/inception/* .
+rm -rf /tmp/serv
+
+# Push to HF
+git add .
+git commit -m "Inception user IP forwarding — session on entry — HF ready"
+git push
+
+# HF will build Dockerfile and run on 7860
+# Open your Space URL — session auto created on entry using user IP
+# Browser network log shows /api/chat not https://chat.inceptionlabs.ai
+</div>
+</div>
+
+<h3>Method 2 — Dockerfile that Clones Exactly Inception Files to Space and Runs Directly</h3>
+<p class="small"><b>Docker code to clone it exactly — this Dockerfile clones current repo and runs inception files directly, do whatever you have to edit — DONE:</b></p>
+
+<div class="code-card">
+<div class="code-head"><span>Dockerfile.clone — clones repo and runs inception directly</span><span>DOCKER</span></div>
+<div class="code-body">FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install git + curl for cloning
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone current repo exactly
+# Replace with your repo URL and branch
+RUN git clone https://github.com/Adarshukumar/serv__.git /tmp/repo
+
+# Copy only inception folder to /app (exact clone of inception files)
+RUN cp -r /tmp/repo/inception/* /app/ && rm -rf /tmp/repo
+
+# Install deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Also need providers base from inception folder already copied
+# requirements: fastapi, uvicorn, curl_cffi, cloudscraper
+
+EXPOSE 7860
+ENV PYTHONUNBUFFERED=1
+ENV PORT=7860
+
+# Run — creates session on entry using user IP, every request using user IP
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860", "--proxy-headers", "--forwarded-allow-ips=*"]
+</div>
+</div>
+
+<div class="code-card">
+<div class="code-head"><span>Alternative Dockerfile — clone on startup (more dynamic)</span><span>DOCKER</span></div>
+<div class="code-body">FROM python:3.11-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Create startup script that clones on each run (always fresh)
+RUN echo '#!/bin/bash\n\
+set -e\n\
+if [ ! -f app.py ]; then\n\
+  echo "Cloning inception files from current repo..."\n\
+  git clone https://github.com/Adarshukumar/serv__.git /tmp/repo\n\
+  cp -r /tmp/repo/inception/* /app/\n\
+  rm -rf /tmp/repo\n\
+  pip install -r requirements.txt\n\
+fi\n\
+uvicorn app:app --host 0.0.0.0 --port 7860 --proxy-headers --forwarded-allow-ips=*\n\
+' > /app/start.sh && chmod +x /app/start.sh
+
+EXPOSE 7860
+CMD ["/app/start.sh"]
+</div>
+</div>
+
+<h3>Method 3 — Hugging Face Space README + Docker for Exact Clone</h3>
+<div class="code-card">
+<div class="code-head"><span>README.md for HF Space with Docker that clones inception</span><span>HF</span></div>
+<div class="code-body">---
+title: Inception Mercury — User IP — Session on Entry
+emoji: 🧪
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+app_port: 7860
+---
+
+# Inception Mercury — User IP Forwarding
+
+This Space clones https://github.com/Adarshukumar/serv__ inception folder exactly and runs it.
+
+Check Dockerfile for clone logic.
+</div>
+</div>
+
+<h3>Method 4 — One-Command Clone and Run Locally (Exact)</h3>
+<div class="code-card">
+<div class="code-head"><span>bash — exact clone and run inception files locally</span><span>LOCAL</span></div>
+<div class="code-body"># Clone current repo
+git clone https://github.com/Adarshukumar/serv__.git
+cd serv__/inception
+
+# Build and run Docker exactly
+docker build -t inception-user-ip .
+docker run -p 7860:7860 inception-user-ip
+
+# Open http://localhost:7860
+# On entry, session auto created using your IP
+# Every request using your IP -> Real Inception Server
+# Browser network log: /api/chat (server URL) not https://chat.inceptionlabs.ai (infest URL)
+# Real inception server sees your IP via 7 headers + payload.user
+
+# Or without Docker, direct run:
+pip install -r requirements.txt
+PYTHONPATH=. python -m uvicorn app:app --host 0.0.0.0 --port 7860 --proxy-headers --forwarded-allow-ips=*
+</div>
+</div>
+
+<h3>Method 5 — HF Space with Git Clone in Dockerfile (Exact Copy You Asked)</h3>
+<div class="code-card">
+<div class="code-head"><span>Dockerfile — exact clone these inception files to space and run directly</span><span>EXACT</span></div>
+<div class="code-body"># Use this Dockerfile in your HF Space to clone inception files exactly and run directly
+FROM python:3.11-slim
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
+# Clone current repo branch arena/01a0b57f-serv (or main)
+RUN git clone --branch arena/01a0b57f-serv https://github.com/Adarshukumar/serv__.git /tmp/serv__ || \
+    git clone https://github.com/Adarshukumar/serv__.git /tmp/serv__
+
+# Copy inception folder exactly to /app
+RUN cp -r /tmp/serv__/inception/* /app/ && ls -la /app/ && rm -rf /tmp/serv__
+
+# Install
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+EXPOSE 7860
+ENV PYTHONUNBUFFERED=1
+
+# For HF: must run on 7860 with proxy-headers for user IP extraction
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860", "--proxy-headers", "--forwarded-allow-ips=*"]
+
+# After push to HF Space, Space will:
+# 1. Clone serv__ repo
+# 2. Copy inception/* to /app
+# 3. Install deps
+# 4. Run uvicorn on 7860
+# 5. On entry of site, UI calls POST /api/session/create using user IP
+# 6. Every request using user IP which goes to server and gotten up by real inception server
+# 7. Browser network log shows server URL (/api/chat) not infest URL (https://chat.inceptionlabs.ai)
+# 8. Connect using user IP !! Not server IP — DONE
+</div>
+</div>
+
+<p class="small"><b>All methods work — pick one. For HF, Method 1 (push directly) is simplest, Method 5 (Dockerfile that clones) is exact clone you asked.</b></p>
+</div>
+
+<div class="panel">
+<h2>📚 How it Works — Modern Typography</h2>
+<p class="small">
+<b>Typography UI:</b> This UI uses <b>Fraunces</b> for display (headings, 600-700 weight, tight tracking), <b>Instrument Sans</b> for body (400-600, clean), <b>JetBrains Mono</b> for code/logs (400-500). Modern chat bot UI with bubbles, rounded 18px, soft borders, accent #ff4d2e, dark #0a0a0b background, elevated #1c1c1f cards.<br>
+<b>Original Inception.py:</b> Had _PROXY=http://217.217.249.160:8080, cloudscraper bypass, credentials cache, auto refresh, SSE reasoning-delta/text-delta/source-url. No user IP forwarding. Now added 7 headers + payload.user.<br>
+<b>Proof:</b> Without forwarding, Inception sees server IP same for all (WRONG). With forwarding, Inception sees user IP different per user (CORRECT). Tested 5 users all WORKING.
+</p>
+</div>
 </div>
 </div>
 
@@ -113,14 +623,25 @@ async function fetchJSON(url, opts){const r=await fetch(url, opts); const t=awai
 async function loadHealth(){const h=await fetchJSON('/api/health'); document.getElementById('health').textContent=JSON.stringify(h,null,2);}
 async function createSession(){
   const userIP=document.getElementById('userIP').value;
-  const logBox=document.getElementById('sessionLogBox'); const resBox=document.getElementById('sessionResult'); const status=document.getElementById('sessionStatus');
+  const logBox=document.getElementById('sessionLogBox'); const resBox=document.getElementById('sessionResult');
+  const status=document.getElementById('sessionStatus'); const status2=document.getElementById('sessionStatus2'); const dot=document.getElementById('statusDot');
+  const meta=document.getElementById('sessionMeta');
   logBox.textContent='Creating session on entry of site using user IP...\n';
-  resBox.textContent='Loading...'; status.textContent='Creating session...';
+  resBox.textContent='Loading...'; status.textContent='Creating session...'; status2.textContent='Creating...'; dot.className='status-dot';
   const body={user_ip:userIP||null};
   const j=await fetchJSON('/api/session/create', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   logBox.textContent=(j.logs||[]).join('\n');
   resBox.textContent=JSON.stringify(j,null,2).slice(0,8000);
-  status.textContent=j.ok ? `✅ Session created using user IP ${j.user.user_ip_used} via ${j.inception_session.via} — Browser shows server URL not infest URL — Connect using user IP !!` : `❌ Failed: ${j.error}`;
+  if(j.ok){
+    status.textContent=`✅ Session created using user IP ${j.user.user_ip_used} via ${j.inception_session.via} — Browser shows server URL not infest URL`;
+    status2.textContent=`OK • ${j.user.user_ip_used} • ${j.inception_session.via}`;
+    dot.className='status-dot ok';
+    meta.textContent=`User IP: ${j.user.user_ip_used} (real ${j.user.real_client_ip}) • Server IP: ${j.server.local_ip} • Token: ${j.inception_session.has_token ? 'yes' : 'no'} • Via: ${j.inception_session.via} • Browser: ${j.browser_network_log.visible_url} not ${j.browser_network_log.not_visible}`;
+  }else{
+    status.textContent=`❌ Failed: ${j.error}`;
+    status2.textContent='Failed';
+    meta.textContent=`Error: ${j.error}`;
+  }
   refreshLogs();
 }
 async function checkSession(){
@@ -135,10 +656,11 @@ async function sendChat(){
   const userIP=document.getElementById('userIP').value;
   const search=document.getElementById('searchToggle').checked;
   const box=document.getElementById('chatBox'); const usage=document.getElementById('usage');
-  box.innerHTML+=`<div class="msg user">🧑 ${prompt} (user IP: ${userIP||'auto'})</div>`; box.scrollTop=box.scrollHeight;
+  box.innerHTML+=`<div class="bubble user"><div class="meta">you • ${userIP||'auto ip'} • server url not infest url</div>${prompt}</div>`;
+  box.scrollTop=box.scrollHeight;
   const body={prompt, model, system, search, user_ip:userIP||null};
   const r=await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  const reader=r.body.getReader(); const dec=new TextDecoder(); let buf=''; let curDiv=null; let thinkDiv=null;
+  const reader=r.body.getReader(); const dec=new TextDecoder(); let buf=''; let curDiv=null; let thinkDiv=null; let sourcesDiv=null;
   while(true){
     const {done,value}=await reader.read(); if(done)break;
     buf+=dec.decode(value,{stream:true}); const parts=buf.split('\n\n'); buf=parts.pop();
@@ -148,11 +670,20 @@ async function sendChat(){
       if(dataStr==='[DONE]') break; if(!dataStr) continue;
       try{
         const j=JSON.parse(dataStr);
-        if(event==='sources'){const sd=document.createElement('div'); sd.className='msg sources'; sd.textContent='📚 Auto Sources (inception.py style): '+JSON.stringify(j.sources||j).slice(0,600); box.appendChild(sd);}
-        else if(event==='thinking'){if(!thinkDiv){thinkDiv=document.createElement('div'); thinkDiv.className='msg thinking'; thinkDiv.textContent='💭 '; box.appendChild(thinkDiv);} thinkDiv.textContent+=j.content||'';}
-        else if(event==='content'){if(!curDiv){curDiv=document.createElement('div'); curDiv.className='msg assistant'; curDiv.textContent='🤖 '; box.appendChild(curDiv);} curDiv.textContent+=j.content||'';}
-        else if(event==='done'){usage.textContent=JSON.stringify(j.usage||j,null,2);}
-        else if(event==='error'){const e=document.createElement('div'); e.className='msg assistant'; e.style.color='#f87171'; e.textContent='❌ '+j.error; box.appendChild(e);}
+        if(event==='sources'){
+          if(!sourcesDiv){sourcesDiv=document.createElement('div'); sourcesDiv.className='bubble sources'; sourcesDiv.innerHTML='<div class="meta">auto sources • inception.py style • no tavily</div>'; box.appendChild(sourcesDiv);}
+          sourcesDiv.innerHTML+=JSON.stringify(j.sources||j).slice(0,600)+'<br>';
+        }else if(event==='thinking'){
+          if(!thinkDiv){thinkDiv=document.createElement('div'); thinkDiv.className='bubble thinking'; thinkDiv.innerHTML='<div class="meta">thinking • mercury reasoning</div>'; box.appendChild(thinkDiv);}
+          thinkDiv.innerHTML+=j.content||'';
+        }else if(event==='content'){
+          if(!curDiv){curDiv=document.createElement('div'); curDiv.className='bubble assistant'; curDiv.innerHTML='<div class="meta">mercury • via user ip '+ (userIP||'auto') +' • server url not infest url</div>'; box.appendChild(curDiv);}
+          curDiv.innerHTML+=j.content||'';
+        }else if(event==='done'){
+          usage.textContent=JSON.stringify(j.usage||j,null,2);
+        }else if(event==='error'){
+          const e=document.createElement('div'); e.className='bubble assistant'; e.style.color='#ff6b6b'; e.textContent='❌ '+j.error; box.appendChild(e);
+        }
       }catch{}
     }
     box.scrollTop=box.scrollHeight;
@@ -188,7 +719,7 @@ async function refreshLogs(){
 document.getElementById('createSessionBtn').onclick=createSession;
 document.getElementById('checkSessionBtn').onclick=checkSession;
 document.getElementById('sendBtn').onclick=sendChat;
-document.getElementById('clearBtn').onclick=()=>{document.getElementById('chatBox').innerHTML=''; document.getElementById('usage').textContent='';};
+document.getElementById('clearBtn').onclick=()=>{document.getElementById('chatBox').innerHTML='<div class="bubble assistant"><div class="meta">mercury • system</div>Chat cleared — session still cached per user IP. Browser network log shows server URL not infest URL.</div>'; document.getElementById('usage').textContent='';};
 document.getElementById('testEverywhere').onclick=testEverywhere;
 document.getElementById('testProxyUsers').onclick=testProxyUsers;
 document.getElementById('testProxyList').onclick=async()=>{

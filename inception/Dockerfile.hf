@@ -1,0 +1,33 @@
+# Dockerfile.hf — For Hugging Face Space that clones inception files exactly and runs directly
+# This is the exact code you asked: docker code to clone it exactly to clone these inception files to space and run directly
+# Use this Dockerfile as your HF Space Dockerfile
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
+# Clone current repo — exact clone
+# If you want specific branch, use --branch arena/01a0b57f-serv
+RUN git clone https://github.com/Adarshukumar/serv__.git /tmp/repo && \
+    cp -r /tmp/repo/inception/* /app/ && \
+    rm -rf /tmp/repo
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+EXPOSE 7860
+ENV PYTHONUNBUFFERED=1
+ENV PORT=7860
+
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860", "--proxy-headers", "--forwarded-allow-ips=*"]
+
+# After push to HF Space, HF will:
+# 1. Clone Adarshukumar/serv__ repo
+# 2. Copy inception/* to /app
+# 3. Install deps
+# 4. Run on 7860
+# 5. On entry, UI auto creates session using user IP via 7 headers
+# 6. Every request using user IP -> Real Inception Server sees user IP
+# 7. Browser network log shows /api/chat (server URL) not https://chat.inceptionlabs.ai (infest URL)
+# 8. Connect using user IP !! Not server IP — DONE

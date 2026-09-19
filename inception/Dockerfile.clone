@@ -1,0 +1,35 @@
+# Dockerfile.clone — Exact clone these inception files to space and run directly
+# This Dockerfile clones current repo Adarshukumar/serv__ and runs inception files directly
+# Do whatever you have to edit — DONE
+# For Hugging Face Spaces: this Dockerfile will clone inception folder exactly and run it
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install git + dependencies for curl_cffi
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone current repo exactly — branch arena/01a0b57f-serv or main
+# This clones the entire serv__ repo which contains inception folder
+RUN git clone https://github.com/Adarshukumar/serv__.git /tmp/serv__ && \
+    ls -la /tmp/serv__/inception/ && \
+    cp -r /tmp/serv__/inception/* /app/ && \
+    rm -rf /tmp/serv__ && \
+    ls -la /app/
+
+# Install requirements from inception folder
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Hugging Face Spaces expects 7860
+EXPOSE 7860
+
+ENV PYTHONUNBUFFERED=1
+ENV PORT=7860
+ENV PYTHONPATH=/app
+
+# Run — creates session on entry using user IP, every request using user IP
+# Browser network log shows server URL not infest URL, real inception server sees user IP
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860", "--proxy-headers", "--forwarded-allow-ips=*"]
