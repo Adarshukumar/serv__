@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  inception-user-ip:
+    build: .
+    ports:
+      - "7860:7860"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PORT=7860
+    volumes:
+      - ./:/app
+    command: uvicorn app:app --host 0.0.0.0 --port 7860 --proxy-headers --forwarded-allow-ips=* --reload
