@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>SILK</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%231f6feb'/><path d='M9 20c3 2 6-4 9-2s3 4 5 2' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round'/></svg>">
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="dot" id="status" title="connection"></div>
+    <div class="brand">silk<span>·</span>chat</div>
+    <div class="pills">
+      <div class="pill" id="p-model" title="model">—</div>
+      <div class="pill opt" id="p-rate" title="per-IP rate limit">—</div>
+      <div class="pill" id="p-ip" title="how this server resolved your IP">—</div>
+    </div>
+  </header>
+
+  <main id="log">
+    <div class="empty" id="empty">
+      <h2>Ask something</h2>
+      <p>Replies stream from the server over SSE. Nothing in this page talks to
+         the model API directly — the token stays server-side.</p>
+      <p><code>⏎ send</code> &nbsp; <code>⇧⏎ newline</code> &nbsp; <code>Esc stop</code></p>
+    </div>
+  </main>
+
+  <footer>
+    <form class="composer" id="form" autocomplete="off">
+      <textarea id="input" rows="1" placeholder="Message…" maxlength="32000"></textarea>
+      <div class="bar">
+        <div class="toggles">
+          <button type="button" class="tg" id="t-search" aria-pressed="false"
+                  title="ask upstream to run a web search">web search</button>
+          <button type="button" class="tg" id="t-think" aria-pressed="true"
+                  title="show the model's reasoning stream">thinking</button>
+        </div>
+        <span class="count" id="count"></span>
+        <button type="button" class="ghost" id="reset" title="clear this conversation">reset</button>
+        <button type="button" class="ghost" id="stop" hidden>stop</button>
+        <button type="submit" class="send" id="send">send</button>
+      </div>
+    </form>
+    <div class="hint"><span id="hint">connecting…</span></div>
+  </footer>
+
+</div>
+<script src="/static/app.js" defer></script>
+</body>
+</html>
