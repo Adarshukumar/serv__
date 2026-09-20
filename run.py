@@ -5,6 +5,17 @@ SILK launcher.
     python run.py                # real upstream (https://chat.inceptionlabs.ai)
     python run.py --mock         # + local fake upstream on :8099, nothing external touched
     python run.py --port 8080 --mock
+    python run.py --mock --mock-port 8099 --host 0.0.0.0
+
+THE MOCK LISTENS ON --host, NOT ON LOOPBACK
+  It used to hardcode 127.0.0.1, which broke any environment that reaches the
+  sandbox over a proxied hostname (Arena preview, a Docker network, a remote
+  dev box): the app itself works fine because it talks to the mock over
+  loopback, but a port bound to loopback is invisible to everyone else, and
+  "which port is listening" tooling flags it as a misconfiguration. Binding to
+  0.0.0.0 costs nothing here because INCEPTION_BASE_URL keeps pointing at
+  127.0.0.1 — the mock is still only reachable from inside the box/network.
+  If you want it loopback-only again, pass --mock-host 127.0.0.1.
     python run.py --check        # print the resolved config and exit
 
 --mock exists so you can develop the app without sending a single request to
@@ -36,11 +47,16 @@ def main() -> int:
     ap.add_argument("--host", default=os.getenv("HOST", "0.0.0.0"))
     ap.add_argument("--mock", action="store_true", help="run a fake upstream locally")
     ap.add_argument("--mock-port", type=int, default=8099)
+    ap.add_argument("--mock-host", default=None,
+                    help="defaults to --host; pass 127.0.0.1 to pin it to loopback")
     ap.add_argument("--log", default=os.getenv("LOG_LEVEL", "info"))
     ap.add_argument("--check", action="store_true", help="print config and exit")
     args = ap.parse_args()
 
+    mock_host = args.mock_host or args.host
     if args.mock:
+        # The app reaches the mock over loopback regardless of what the mock
+        # binds to — the app runs in this same box/network namespace.
         os.environ["INCEPTION_BASE_URL"] = f"http://127.0.0.1:{args.mock_port}"
 
     from app.config import banner, settings
@@ -74,7 +90,7 @@ def main() -> int:
     if args.mock:
         mock_proc = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", "mock.inception_api:app",
-             "--host", "127.0.0.1", "--port", str(args.mock_port),
+             "--host", mock_host, "--port", str(args.mock_port),
              "--log-level", "warning", "--no-proxy-headers"],
             cwd=str(HERE),
         )
@@ -104,7 +120,25 @@ def main() -> int:
         cmd += ["--forwarded-allow-ips", ",".join(allow)]
 
     if mock_proc:
-        print(f"mock upstream pid={mock_proc.pid} → http://localhost:{args.mock_port}")
+        print(f"mock upstream pid={mock_proc.pid} on {mock_host}:{args.mock_port} "
+              f"(app connects via 127.0.0.1)")
+
+    # Docker CMD ["python","run.py"] makes this process PID 1, and PID 1 does
+    # not inherit the default SIGTERM action — without this, `docker stop`
+    # ignores the 10s grace period and SIGKILLs uvicorn mid-stream, so open SSE
+    # connections get an abrupt reset instead of a clean close.
+    child = {"p": None}
+
+    def _forward(sig, _frm):
+        for proc in (child["p"], mock_proc):
+            if proc and proc.poll() is None:
+                try:
+                    proc.send_signal(sig)
+                except Exception:
+                    pass
+
+    signal.signal(signal.SIGTERM, _forward)
+    signal.signal(signal.SIGHUP, _forward)
 
     try:
         return subprocess.call(cmd)

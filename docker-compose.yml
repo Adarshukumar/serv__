@@ -1,0 +1,50 @@
+# Run SILK exactly the way the Hugging Face Space will, but on your laptop.
+#
+#   docker compose up --build          → http://localhost:7860
+#   docker compose down
+#
+# `stop_grace_period` matters: the container streams SSE. 10s lets in-flight
+# generations close cleanly instead of being SIGKILLed mid-token (run.py
+# forwards SIGTERM to uvicorn for exactly this).
+#
+# `init: true` is belt-and-braces for the same reason if you swap CMD for a
+# shell form; run.py already installs its own SIGTERM handler.
+services:
+  silk:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: silk:local
+    container_name: silk
+    init: true
+    ports:
+      - "7860:7860"
+    environment:
+      # The image already runs --mock-free against the real upstream. To develop
+      # against the bundled fake instead, mount nothing and run:
+      #   docker compose run --use-aliases --rm -p 7860:7860 silk \
+      #     python run.py --mock --host 0.0.0.0
+      PORT: "7860"
+      HOST: "0.0.0.0"
+      # Host guard: localhost is allowed by default; add your LAN IP or a
+      # reverse-proxy name here if you reach it from another device.
+      ALLOWED_HOSTS: ""
+      TRUSTED_PROXIES: ""          # docker publishes directly → no proxy in front
+      FORWARD_CLIENT_IP: "1"
+      RATE_LIMIT_REQUESTS: "20"
+      MAX_CONCURRENCY: "8"
+      DOCS: "1"
+      # Put a real credential here only via an env file you never commit.
+      # INCEPTION_API_KEY: ""
+    stop_grace_period: 10s
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:7860/healthcheck',timeout=4).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

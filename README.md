@@ -73,6 +73,48 @@ one shared bucket. Pick which, deliberately — don't let it default by accident
 
 ---
 
+## Run it in Docker (same image the Space builds)
+
+```bash
+git clone -b arena/01a0bd10-serv https://github.com/Adarshukumar/serv__.git silk
+cd silk
+
+docker build -t silk:local .                 # or: docker compose up --build
+docker run --rm -p 7860:7860 --name silk   -e TRUSTED_PROXIES=""   silk:local
+# → http://localhost:7860        health: /healthcheck, /api/health
+```
+
+with compose (prefers it — `stop_grace_period` is set so in-flight SSE streams
+close instead of being killed mid-token):
+
+```bash
+docker compose up --build
+docker compose logs -f
+docker compose down
+```
+
+Three things that make this image behave on both Docker and HF:
+
+- **`run.py` binds the mock to `--host`, not loopback.** `--mock` used to
+  hardcode `127.0.0.1`, so any environment that reaches the box over a proxied
+  hostname (sandbox preview, a Docker network, a remote dev machine) saw a
+  refused port. `python run.py --mock --host 0.0.0.0` now publishes it, while
+  `INCEPTION_BASE_URL` still points at `127.0.0.1` — so the mock is reachable
+  *inside* the box/network but is not the thing the app connects to from
+  outside. Pin it back with `--mock-host 127.0.0.1`.
+- **PID 1 signal forwarding.** `CMD ["python","run.py"]` makes the launcher
+  PID 1, which does not inherit the default SIGTERM action. Without an
+  explicit handler `docker stop` skips the grace period and SIGKILLs uvicorn,
+  resetting every open stream. `run.py` now forwards SIGTERM/SIGHUP to the
+  child so the server drains.
+- **`.dockerignore` keeps the legacy folders out of the image.** This repo's
+  root also holds `My PREVIOUS ENTIRE SERVER/` and `New Upstage Change Logs/`;
+  the Dockerfile never COPYs them, and the ignore file stops them from being
+  sent as build context. It also excludes `mock/` and `tests/`, so a hardened
+  container has no fake upstream in it — if you want `--mock` inside a
+  container, run it from a bind mount instead:
+  `docker run -v "$PWD":/src -w /src silk:local python run.py --mock`
+
 ## The one honest sentence about IP forwarding
 
 **Upstream always sees this server's IP as the source of the connection. The

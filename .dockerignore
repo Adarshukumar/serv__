@@ -1,0 +1,21 @@
+# The build context is the whole repo root, which on this repo also contains
+# two folders of legacy server code that the image must never ship. The
+# Dockerfile only COPYs what it needs, so this is hygiene (faster context
+# upload, no accidental cache busts), not the only line of defence.
+.git
+.gitignore
+My PREVIOUS ENTIRE SERVER/
+New Upstage Change Logs/
+tests/
+mock/
+docker-compose.yml
+README.md
+.env
+.env.*
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.log
+.DS_Store
