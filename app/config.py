@@ -94,6 +94,11 @@ class Settings:
     host_guard: bool = field(default_factory=lambda: _bool("HOST_GUARD", "1"))
 
     # ── misc ──────────────────────────────────────────────────────────────
+    # FastAPI generates /docs + /redoc + /openapi.json from the request models.
+    # Harmless here (the schema is all public shape), but it is free surface on
+    # a public Space, so it is switchable. Set DOCS=0 to remove the routes.
+    docs: bool = field(default_factory=lambda: _bool("DOCS", "1"))
+
     system_prompt: str = field(default_factory=lambda: _env(
         "SYSTEM_PROMPT", "You are a helpful, precise assistant."
     ))

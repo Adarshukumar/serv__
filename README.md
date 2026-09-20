@@ -58,6 +58,10 @@ git clone https://huggingface.co/spaces/Adarshukumar/silk
 | `GET /logs/stream` — deliberately a single status line, not real stderr, so prompts in log lines can't be scraped | `app/server.py` §6.5 |
 | valid `Host` header, or HF answers *"connection was not made to a recognised domain"* | `§6.3b host_guard`, allows `*.hf.space` + `localhost`, extend with `ALLOWED_HOSTS=chat.example.com` |
 
+Optional: `DOCS=0` drops `/docs`, `/redoc` and `/openapi.json`. `python run.py
+--check` prints the resolved config plus misconfiguration warnings — run it
+before you push, it is what a Space's build log will not tell you.
+
 **One honesty note specific to Spaces:** behind HF's proxy, `request.client` is
 always `127.0.0.1` and the user IP only exists in `X-Forwarded-For` — which the
 client controls. So on a Space, per-IP limits are **advisory**: someone can

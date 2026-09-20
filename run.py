@@ -26,6 +26,10 @@ sys.path.insert(0, str(HERE.parent))          # makes `app` importable from anyw
 os.chdir(HERE)
 
 
+def allow_hint(cfg) -> list[str]:
+    return [p for p in cfg.trusted_proxies if p.strip()]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="SILK chat server")
     ap.add_argument("--port", type=int, default=int(os.getenv("PORT", "7860")))
@@ -47,6 +51,23 @@ def main() -> int:
     print("───" + "─" * 61)
 
     if args.check:
+        warns = []
+        if settings.trust_all_proxies:
+            warns.append("TRUST_ALL_PROXIES=1 → any client can pick its own "
+                         "identity; per-IP limits are cosmetic")
+        if not allow_hint(settings) and not settings.trust_all_proxies:
+            warns.append("TRUSTED_PROXIES is empty → X-Forwarded-For ignored, "
+                         "every user shares one bucket (correct if exposed "
+                         "directly; wrong if a proxy is in front)")
+        if not settings.forward_client_ip:
+            warns.append("FORWARD_CLIENT_IP=0 → upstream gets no client attribution at all")
+        if "chat.inceptionlabs.ai" in settings.base_url:
+            warns.append("upstream is the live API: prompts leave this box. "
+                         "Use --mock while developing")
+        for w in warns:
+            print(f"  ⚠ {w}")
+        if not warns:
+            print("  no configuration warnings")
         return 0
 
     mock_proc = None

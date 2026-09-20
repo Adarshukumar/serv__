@@ -150,7 +150,15 @@ async def lifespan(app: FastAPI):
         await inc.close_provider()
 
 
-app = FastAPI(title="SILK chat", version="1.0.0", lifespan=lifespan)
+_docs_on = settings.docs
+app = FastAPI(
+    title="SILK chat",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/docs" if _docs_on else None,
+    redoc_url="/redoc" if _docs_on else None,
+    openapi_url="/openapi.json" if _docs_on else None,
+)
 
 
 # ───────────────────────────────────────────────────────────────────────────
