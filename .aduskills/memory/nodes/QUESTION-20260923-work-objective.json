@@ -1,0 +1,102 @@
+{
+  "id": "QUESTION-20260923-work-objective",
+  "type": "QUESTION",
+  "title": "RESOLVED - work objective (was: what is the objective?)",
+  "summary": "RESOLVED 2026-09-23. The user chose a variant of C1 that was broader than any candidate offered: migrate the whole Python server to an npm/React single-page app with no hosted server, provider calls leaving from the user's own IP, Upstage v2 replaced by v3, DevsDo removed, models grouped by provider, design/architecture focus and NOT security. Delivered as app/. U2-U8 remain open and are carried in IC-20260923-react-migration.",
+  "facts": [
+    {
+      "claim": "RESOLUTION: none of the offered candidates C1/C2/C3 matched exactly. The user specified a full language and architecture migration (Python -> npm/React, hosted server -> local egress from the user's own IP) that subsumed C1 (Upstage v3 swap) and explicitly excluded security work. Offering options did not waste effort - it prompted the user to state a much more specific objective than any option listed.",
+      "classification": "OBSERVED",
+      "evidence": [
+        "user message 2026-09-23",
+        "IC-20260923-react-migration.md requirements R1-R16"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "U1 (GATING): which objective? C1 integrate Upstage v3 into the server; C2 make the project runnable/testable in this sandbox; C3 something else (new feature, different repo, work on the aduskill bundle itself).",
+      "classification": "UNKNOWN",
+      "evidence": [
+        "user message contains no task; ACTIVATE.md step 10"
+      ],
+      "confidence": "low"
+    },
+    {
+      "claim": "U2: is 'New Upstage Change Logs/upstage_provider.py' final and approved for integration, or still experimental? Its own test suite has never been run here.",
+      "classification": "UNKNOWN",
+      "evidence": [
+        "no CI, no commit history beyond 'init', no test results anywhere in the repo"
+      ],
+      "confidence": "low"
+    },
+    {
+      "claim": "U3: is 'My PREVIOUS ENTIRE SERVER/' the code currently deployed on Hugging Face Spaces, or an archived snapshot? The word PREVIOUS is ambiguous and this determines rollback risk.",
+      "classification": "UNKNOWN",
+      "evidence": [
+        "no HF Spaces metadata, no README, no deployment config, single 'init' commit"
+      ],
+      "confidence": "low"
+    },
+    {
+      "claim": "U4: are provider credentials available to the user, and may they be installed through a protected mechanism? Without them no live test is possible. Secrets must never be pasted into chat.",
+      "classification": "UNKNOWN",
+      "evidence": [
+        "no .env, no credential cache present"
+      ],
+      "confidence": "low"
+    },
+    {
+      "claim": "U5: is console.upstage.ai reachable from this sandbox? api.upstage.ai returned curl exit 000, but that is a different host and does not answer the question.",
+      "classification": "UNKNOWN",
+      "evidence": [
+        "curl --max-time 12 -> 000 for api.upstage.ai only"
+      ],
+      "confidence": "low"
+    },
+    {
+      "claim": "U6: should dependencies be installed in this sandbox at all, given DrissionPage pulls Chromium and curl-cffi needs a native build? U7: is there a deployment target beyond HF Spaces? U8: why does the repo have no README, CI, .gitignore, or root tests - is hygiene work wanted?",
+      "classification": "UNKNOWN",
+      "evidence": [
+        "state/environment-inventory.md sections 3, 4, 8"
+      ],
+      "confidence": "low"
+    },
+    {
+      "claim": "Supporting inference for C1: v3's public API is a strict superset of v2's, the class name matches, and v3 eliminates the DrissionPage/Chromium/xvfb dependency chain from the Dockerfile. This is evidence of intent, not confirmation from the user.",
+      "classification": "INFERRED",
+      "evidence": [
+        "ARTIFACT-20260923-upstage-v3 method diff and DrissionPage import scan"
+      ],
+      "confidence": "medium"
+    }
+  ],
+  "edges": [
+    {
+      "type": "RELATED_TO",
+      "target": "ARTIFACT-20260923-upstage-v3"
+    },
+    {
+      "type": "RELATED_TO",
+      "target": "RISK-20260923-runtime-unverified"
+    },
+    {
+      "type": "REQUIRES",
+      "target": "human-input skill"
+    },
+    {
+      "type": "SUPERSEDES",
+      "target": "IC-20260923-activation (objective now locked)"
+    },
+    {
+      "type": "RELATED_TO",
+      "target": "ARTIFACT-20260923-app-react-migration"
+    }
+  ],
+  "source": "activation, 2026-09-23",
+  "sensitivity": "internal",
+  "retention": "session",
+  "status": "resolved",
+  "created_at": "2026-09-23",
+  "updated_at": "2026-09-23",
+  "last_verified_at": "2026-09-23"
+}

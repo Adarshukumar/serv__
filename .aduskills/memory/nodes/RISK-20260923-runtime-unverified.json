@@ -1,0 +1,64 @@
+{
+  "id": "RISK-20260923-runtime-unverified",
+  "type": "RISK",
+  "title": "Nothing in serv__ has any runtime verification",
+  "summary": "The repository contains 11,625 lines of unexecuted code with zero installed dependencies, no CI, no runnable tests, and no reachable credentials. Every behavioural claim about this server is currently unproven. Compounded by the fact that the only copy of the working server lives in a directory named 'My PREVIOUS ENTIRE SERVER'.",
+  "facts": [
+    {
+      "claim": "RISK: any statement about server behaviour, provider compatibility, or streaming correctness would be fabricated without installing dependencies first. Likelihood HIGH if unmanaged; impact HIGH (false completion claims). Mitigation: evidence gate - no 'done' claim without fresh tool output; run pip install -r requirements.txt before any runtime assertion; prefer python3 -m py_compile for stdlib-only syntax checks in the meantime.",
+      "classification": "INFERRED",
+      "evidence": ["pip list shows 3 packages", "no CI config, no test runner installed"],
+      "confidence": "high"
+    },
+    {
+      "claim": "RISK: 'My PREVIOUS ENTIRE SERVER/' is the only copy of working server code. An integration that overwrites API/providers/Upstage.py in place destroys the v2 fallback. Likelihood MEDIUM; impact HIGH. Mitigation: branch-only edits, keep v2 at a new path or in Git history, never delete without explicit approval, one revertable commit per increment.",
+      "classification": "INFERRED",
+      "evidence": ["no backup, no tags, single 'init' commit, no other branch containing the code"],
+      "confidence": "high"
+    },
+    {
+      "claim": "RISK: DrissionPage and curl-cffi need native/browser toolchains (Chromium; gcc + libffi-dev). Installing them in this sandbox is unverified and may fail or be slow. Likelihood MEDIUM; impact MEDIUM (blocks C2 and live testing). Mitigation: install incrementally, capture output, stop and report on failure rather than looping; approval gate before installing.",
+      "classification": "INFERRED",
+      "evidence": ["Dockerfile installs gcc, libffi-dev, chromium, chromium-driver, xvfb explicitly for these deps; neither is present in the sandbox"],
+      "confidence": "medium"
+    },
+    {
+      "claim": "RISK: all 7 providers depend on third-party endpoints the sandbox does not own. Uninvited live traffic could violate provider terms or trip abuse detection. Likelihood MEDIUM; impact HIGH (third-party impact). Mitigation: ADUSKILLS section 10 defensive-only doctrine - no live traffic without explicit user authorization and bounded scope; offline suites and canned-event tests first.",
+      "classification": "INFERRED",
+      "evidence": ["api.upstage.ai already unreachable (curl 000)", "providers use captured session credentials and TLS impersonation"],
+      "confidence": "high"
+    },
+    {
+      "claim": "RISK: the providers authenticate with captured browser session credentials (CSRF + cookies) cached to disk. Mishandling could leak live session material into logs, commits, or artifacts. Likelihood MEDIUM; impact HIGH. Mitigation: never print or commit credential caches; redact before any memory write; keep cache dirs out of Git; no secrets in chat.",
+      "classification": "OBSERVED",
+      "evidence": ["class _Creds in both Upstage versions", "UPSTAGE_CACHE_DIR/MERCURY_CACHE_DIR env in Dockerfile", "no .gitignore exists in the repo"],
+      "confidence": "high"
+    },
+    {
+      "claim": "RISK: the repo has no .gitignore. Adding one, or committing state files, could inadvertently track credential caches or __pycache__ once dependencies are installed. Likelihood MEDIUM; impact MEDIUM. Mitigation: add a .gitignore covering caches, .env, and credential dirs before installing anything.",
+      "classification": "INFERRED",
+      "evidence": ["find shows no .gitignore among the 18 tracked files"],
+      "confidence": "high"
+    },
+    {
+      "claim": "OPEN: whether this repo is live on Hugging Face Spaces right now is UNKNOWN. The directory name says 'PREVIOUS', which could mean archived or could mean 'the server as it previously was'. This determines how careful deployment changes must be.",
+      "classification": "UNKNOWN",
+      "evidence": ["no HF Spaces metadata, no README, no CI, nothing in Git history"],
+      "confidence": "low"
+    }
+  ],
+  "edges": [
+    {"type": "AFFECTS", "target": "PROJECT-20260923-serv-llm-gateway"},
+    {"type": "AFFECTS", "target": "ARTIFACT-20260923-upstage-v3"},
+    {"type": "MITIGATES", "target": "GOAL-20260923-activate-aduskills (evidence + security + approval gates)"},
+    {"type": "DERIVED_FROM", "target": "EVIDENCE-20260923-environment-inventory"},
+    {"type": "RELATED_TO", "target": "QUESTION-20260923-work-objective"}
+  ],
+  "source": "activation inspection, 2026-09-23",
+  "sensitivity": "internal",
+  "retention": "project",
+  "status": "active",
+  "created_at": "2026-09-23",
+  "updated_at": "2026-09-23",
+  "last_verified_at": "2026-09-23"
+}

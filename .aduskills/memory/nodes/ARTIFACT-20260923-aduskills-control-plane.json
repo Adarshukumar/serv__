@@ -1,0 +1,51 @@
+{
+  "id": "ARTIFACT-20260923-aduskills-control-plane",
+  "type": "ARTIFACT",
+  "title": "ADUSKILLS control plane files created at activation",
+  "summary": "Every path created in the serv__ workspace during activation, so a later session can locate state without re-deriving it. All additive; no pre-existing file was modified.",
+  "facts": [
+    {
+      "claim": "Copied verbatim from the bundle into .aduskills/: ACTIVATE.md, ADUSKILLS.md, ADUSKILLS-MANIFEST.json, CAPABILITIES.md, DEEP-RESEARCH.md, README-FIRST.md, NOTICE, LICENSE, LICENSE-ADUSKILLS, policies/{security,authorized-security-testing,restricted-defensive-validation}.md, memory/templates/{handoff.md,node.json}.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["cp from /home/user/aduskills; find .aduskills -type f listing"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Authored new: AGENTS.md (repo root), .aduskills/state/environment-inventory.md, .aduskills/state/activation-log.md, .aduskills/state/skills-route.md, .aduskills/memory/intent/IC-20260923-activation.md, .aduskills/memory/handoffs/HANDOFF-20260923-activation.md, and 7 JSON nodes in .aduskills/memory/nodes/.",
+      "classification": "OBSERVED",
+      "evidence": ["write_file operations during activation"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Two distinct AGENTS.md remediations for bundle finding B-1 (verify-activation.py requires AGENTS.md at the bundle root; absent upstream, exit 1). (a) In the out-of-repo bundle copy: symlink AGENTS.md -> ADUSKILLS.md, per README-FIRST.md item 2 which says AGENTS.md carries the same core operating instructions; verify-activation.py then exits 0 with 'activation verification: PASS'. (b) In the repo: an authored AGENTS.md pointing at the control plane. Upstream github.com/Adarshukumar/aduskill was NOT modified; B-1 remains a live upstream finding.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["python3 scripts/verify-activation.py -> exit 1 before, exit 0 after", "ls -la /home/user/aduskills/AGENTS.md -> symlink to ADUSKILLS.md", "README-FIRST.md item 2"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Out-of-repo artifact: /home/user/aduskills - the full bundle relocated from /tmp/aduskill_probe with .git excluded. 48 MB, 5,728 files, 38 skills under .agents/skills/. verify-bundle.py re-run from this location still reports PASS.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["tar copy excluding .git", "du -sh -> 48M", "find -type f | wc -l -> 5728", "python3 scripts/verify-bundle.py exit 0"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Nothing has been committed. All additions are untracked on branch arena/01a0ccca-serv; main remains at e57f3a2. Committing is an approval gate.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["git status"],
+      "confidence": "high"
+    }
+  ],
+  "edges": [
+    {"type": "IMPLEMENTS", "target": "GOAL-20260923-activate-aduskills"},
+    {"type": "DERIVED_FROM", "target": "DECISION-20260923-minimal-footprint-install"},
+    {"type": "VERIFIED_BY", "target": "EVIDENCE-20260923-environment-inventory"},
+    {"type": "AFFECTS", "target": "PROJECT-20260923-serv-llm-gateway"}
+  ],
+  "source": "activation, 2026-09-23",
+  "sensitivity": "internal",
+  "retention": "project",
+  "status": "active",
+  "created_at": "2026-09-23",
+  "updated_at": "2026-09-23",
+  "last_verified_at": "2026-09-23"
+}

@@ -1,0 +1,53 @@
+{
+  "id": "GOAL-20260923-activate-aduskills",
+  "type": "GOAL",
+  "title": "Activate ADUSKILLS and establish the serv__ working space",
+  "summary": "User sent 'Activate', asked for Activate.md and ADUSKILLS.md to be read, and said 'Establiish the Space lets start working...'. The activation and space-establishment half is COMPLETE and evidenced. The 'start working' half is BLOCKED on the user naming an objective, because ACTIVATE.md step 10 says to wait for the task when none was supplied.",
+  "facts": [
+    {
+      "claim": "Activation executed all 10 boot steps from ACTIVATE.md. Steps 1-9 are complete with tool evidence; step 10 ('wait for the task if none was supplied') is the current state.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": [".aduskills/state/activation-log.md step table"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Space established: .aduskills/ control plane (14 files, 72 KB) inside the repo, full 48 MB / 5,728-file bundle at /home/user/aduskills outside Git, root AGENTS.md pointer, plus state/ and memory/ subtrees.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["find .aduskills -type f", "du -sh /home/user/aduskills"],
+      "confidence": "high"
+    },
+    {
+      "claim": "No project source file was modified during activation. All 18 original files are byte-identical; only new .aduskills/ and AGENTS.md paths were added.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["git status shows only untracked additions; no tracked file touched"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Availability was reported honestly per ACTIVATE.md: missing docker/go/rust/java/pnpm/uv named explicitly, zero installed dependencies disclosed, no credentials claimed, no MCP server claimed active, restricted-defensive-validation left disabled.",
+      "classification": "OBSERVED",
+      "evidence": ["state/environment-inventory.md sections 2-7"],
+      "confidence": "high"
+    },
+    {
+      "claim": "STATUS: partial. Activation complete; work not started. Blocking question recorded as QUESTION-20260923-work-objective.",
+      "classification": "OBSERVED",
+      "evidence": ["memory/intent/IC-20260923-activation.md status field"],
+      "confidence": "high"
+    }
+  ],
+  "edges": [
+    {"type": "WANTS", "target": "USER-20260923-adarsh"},
+    {"type": "REQUIRES", "target": "QUESTION-20260923-work-objective"},
+    {"type": "CONSTRAINS", "target": "DECISION-20260923-minimal-footprint-install"},
+    {"type": "VERIFIED_BY", "target": "EVIDENCE-20260923-environment-inventory"},
+    {"type": "IMPLEMENTS", "target": "ARTIFACT-20260923-aduskills-control-plane"},
+    {"type": "DEPENDS_ON", "target": "PROJECT-20260923-serv-llm-gateway"}
+  ],
+  "source": "user message, 2026-09-23",
+  "sensitivity": "internal",
+  "retention": "project",
+  "status": "active",
+  "created_at": "2026-09-23",
+  "updated_at": "2026-09-23",
+  "last_verified_at": "2026-09-23"
+}

@@ -1,0 +1,15 @@
+{
+  "name": "Aduskills",
+  "display_name": "ADUSKILLS — Deep Autonomous Agent Operating System",
+  "bundle_author": "Adarsh",
+  "activation_command": "ACTIVATE",
+  "version": "1.1.0",
+  "entrypoint": "ACTIVATE.md",
+  "operating_instructions": "ADUSKILLS.md",
+  "skills_path": ".agents/skills",
+  "memory_path": "memory",
+  "license": "MIT for original Aduskills orchestration content; incorporated components retain their original licenses and copyright notices",
+  "upstream_notices": "integrations/licenses",
+  "default_security_mode": "defensive",
+  "restricted_validation_default": "disabled"
+}

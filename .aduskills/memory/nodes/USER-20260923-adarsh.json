@@ -1,0 +1,56 @@
+{
+  "id": "USER-20260923-adarsh",
+  "type": "USER",
+  "title": "User profile - Adarsh (bundle author)",
+  "summary": "Sparse, evidence-only profile built from one message. Most of this is UNKNOWN and must be filled in by observation, not assumption. Deliberately records communication style so a later session does not misread terseness as dissatisfaction.",
+  "facts": [
+    {
+      "claim": "Identified as 'Adarsh' - the ADUSKILLS bundle author per ACTIVATE.md, ADUSKILLS.md, NOTICE, and ADUSKILLS-MANIFEST.json ('bundle_author': 'Adarsh'). The server's Dockerfile also sets SERVER_SYSTEM_PROMPT to 'You are a So powerfUl assistant Powered By Adarsh Kumar', corroborating the name independently.",
+      "classification": "SOURCE_SUPPORTED",
+      "evidence": ["ADUSKILLS-MANIFEST.json bundle_author", "NOTICE", "Dockerfile SERVER_SYSTEM_PROMPT"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Communicates in terse, informal, imperative shorthand with typos ('Establiish', 'Activate.md and ADUSKILLS.md' as bare links, repeated 'Activate'). ADUSKILLS section 4 requires normalizing silently and never mocking or rejecting informal input - so typos are treated as noise, not as ambiguity requiring correction.",
+      "classification": "OBSERVED",
+      "evidence": ["the single user message"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Supplied no task with ACTIVATE and said 'lets start working...', signalling intent to begin immediately rather than to plan at length. Implication: keep responses proportional, lead with status and evidence, and ask only the questions that actually gate work.",
+      "classification": "INFERRED",
+      "evidence": ["user message structure: command + file references + 'lets start working'"],
+      "confidence": "medium"
+    },
+    {
+      "claim": "Works across at least two of their own GitHub repositories (Adarshukumar/serv__ and Adarshukumar/aduskill), authored a large multi-domain agent skill bundle, and builds LLM gateway servers that front third-party providers using captured session credentials and TLS impersonation. Comfortable with Python, asyncio, FastAPI, Docker, and Hugging Face Spaces deployment.",
+      "classification": "INFERRED",
+      "evidence": ["repo ownership and contents", "5,728-file bundle", "11,625 LOC of async Python"],
+      "confidence": "medium"
+    },
+    {
+      "claim": "Preferences on code style, testing depth, commit granularity, PR workflow, documentation, and language of response are all UNKNOWN. Do not assume; observe and ask.",
+      "classification": "UNKNOWN",
+      "evidence": ["no CONTRIBUTING, no style config, no prior commits beyond 'init', no conversation history"],
+      "confidence": "low"
+    },
+    {
+      "claim": "No secret, credential, password, API key, OTP, or payment detail has been requested from or supplied by the user, and none may be requested in chat per ADUSKILLS section 5.",
+      "classification": "OBSERVED",
+      "evidence": ["conversation so far"],
+      "confidence": "high"
+    }
+  ],
+  "edges": [
+    {"type": "OWNS", "target": "PROJECT-20260923-serv-llm-gateway"},
+    {"type": "WANTS", "target": "GOAL-20260923-activate-aduskills"},
+    {"type": "BLOCKED_BY", "target": "QUESTION-20260923-work-objective (only the user can resolve it)"}
+  ],
+  "source": "single user message + repository attribution, 2026-09-23",
+  "sensitivity": "internal",
+  "retention": "project",
+  "status": "active",
+  "created_at": "2026-09-23",
+  "updated_at": "2026-09-23",
+  "last_verified_at": "2026-09-23"
+}

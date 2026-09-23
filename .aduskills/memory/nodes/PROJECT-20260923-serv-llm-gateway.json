@@ -1,0 +1,75 @@
+{
+  "id": "PROJECT-20260923-serv-llm-gateway",
+  "type": "PROJECT",
+  "title": "serv__ — FastAPI multi-provider LLM gateway",
+  "summary": "Repository /home/user/serv__ (github.com/Adarshukumar/serv__) holds a FastAPI server that fronts 7 third-party LLM providers behind a unified /v1/chat interface, packaged for Hugging Face Spaces on port 7860. A second directory holds an in-flight v3 rewrite of the Upstage provider.",
+  "facts": [
+    {
+      "claim": "Repo root is /home/user/serv__; origin https://github.com/Adarshukumar/serv__.git; single commit e57f3a2 'init'; default branch main.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["git remote -v", "git log --oneline", "git branch -a"],
+      "confidence": "high"
+    },
+    {
+      "claim": "18 tracked files, 11,625 lines of Python, in two directories: 'My PREVIOUS ENTIRE SERVER/' and 'New Upstage Change Logs/'. No root-level README, CI config, .gitignore, .env, or tests.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["find . -path ./.git -prune -o -type f -print", "wc -l on all .py files"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Server.py (1314 lines) exposes GET /, /health, /v1/models, /internal/v1/models, /v1/sessions/{user_id}, /v1/users, /v1/status; DELETE /v1/sessions/{user_id}; POST /v1/session/reset, /v1/warmup, /v1/credentials/refresh, /v1/chat, /v1/chat/completions, /v1/chat/stream.",
+      "classification": "OBSERVED",
+      "evidence": ["rg -n '@app\\.(get|post|put|delete)' 'My PREVIOUS ENTIRE SERVER/Server.py'"],
+      "confidence": "high"
+    },
+    {
+      "claim": "7 providers registered in API/Client.py _PROVIDER_SPECS: DeepInfra (sync), Dolphin (async), DevsDo (async), Mercury/Inception (async, heavy_connect), LLMChat (async), mCloudFlare (sync), Upstage (async, heavy_connect).",
+      "classification": "OBSERVED",
+      "evidence": ["My PREVIOUS ENTIRE SERVER/API/Client.py lines 30-38"],
+      "confidence": "high"
+    },
+    {
+      "claim": "API/Models.py (1528 lines) is a cross-provider model registry; its header documents Upstage 4 models, Mercury 1, mCloudFlare 4, LLMChat 24, Dolphin 2, DevsDo 52.",
+      "classification": "OBSERVED",
+      "evidence": ["My PREVIOUS ENTIRE SERVER/API/Models.py docstring lines 1-35"],
+      "confidence": "high"
+    },
+    {
+      "claim": "requirements.txt declares 10 deps: fastapi, uvicorn[standard], pydantic, aiohttp, aiofiles, requests, cloudscraper, curl-cffi, DrissionPage, python-multipart.",
+      "classification": "OBSERVED",
+      "evidence": ["cat 'My PREVIOUS ENTIRE SERVER/requirements.txt'"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Dockerfile targets python:3.11-slim for HF Spaces: non-root appuser uid/gid 1000, EXPOSE 7860, HEALTHCHECK curl /health, installs chromium + chromium-driver + xvfb for DrissionPage, sets SERVER_SYSTEM_PROMPT and ~15 SERVER_* env defaults.",
+      "classification": "OBSERVED",
+      "evidence": ["cat 'My PREVIOUS ENTIRE SERVER/Dockerfile'"],
+      "confidence": "high"
+    },
+    {
+      "claim": "The Upstage provider authenticates by capturing browser-session credentials (CSRF token + cookies) rather than a static API key; both v2 and v3 implement _Creds with load/save/clear/verify/capture and a cache dir (UPSTAGE_CACHE_DIR).",
+      "classification": "OBSERVED",
+      "evidence": ["Upstage.py class _Creds line 310", "upstage_provider.py class _Creds line 609", "Dockerfile UPSTAGE_CACHE_DIR=/tmp/.cache/upstage"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Directory names contain spaces, so every shell path must be quoted.",
+      "classification": "OBSERVED",
+      "evidence": ["ls -la /home/user/serv__"],
+      "confidence": "high"
+    }
+  ],
+  "edges": [
+    {"type": "OWNS", "target": "USER-20260923-adarsh"},
+    {"type": "RELATED_TO", "target": "ARTIFACT-20260923-upstage-v3"},
+    {"type": "AFFECTS", "target": "RISK-20260923-runtime-unverified"},
+    {"type": "RELATED_TO", "target": "GOAL-20260923-activate-aduskills"}
+  ],
+  "source": "direct inspection of /home/user/serv__ at activation",
+  "sensitivity": "internal",
+  "retention": "project",
+  "status": "active",
+  "created_at": "2026-09-23",
+  "updated_at": "2026-09-23",
+  "last_verified_at": "2026-09-23"
+}

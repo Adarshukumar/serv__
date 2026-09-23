@@ -1,0 +1,99 @@
+{
+  "id": "EVIDENCE-20260923-environment-inventory",
+  "type": "EVIDENCE",
+  "title": "Sandbox capability inventory at activation",
+  "summary": "What is actually available in this sandbox, established by direct tool output on 2026-09-23. Recorded so no future claim overstates capability. Full detail in .aduskills/state/environment-inventory.md.",
+  "facts": [
+    {
+      "claim": "AVAILABLE: python3 3.11.2, pip3 23.0.1, node v22.22.3, npm/npx 10.9.8, yarn 1.22.22, git 2.39.5, gh 2.23.0, curl 7.88.1, wget 1.21.3, jq 1.6, ripgrep 13.0.0.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["command -v + --version loop over 17 binaries"],
+      "confidence": "high"
+    },
+    {
+      "claim": "MISSING: pnpm, go, rustc, cargo, java, docker, uv. Consequence: the Dockerfile cannot be built or validated locally.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["same loop: each printed MISSING"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Zero project dependencies installed. pip list returns exactly three packages: pip 23.0.1, setuptools 66.1.1, wheel 0.38.4. The server cannot be imported, run, or tested as-is.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["python3 -m pip list"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Network: github.com HTTP 200, pypi.org HTTP 200 (so pip install is viable). api.upstage.ai returned 000 (connection failed within 12s). The provider targets console.upstage.ai, so reachability of the real host is UNKNOWN, not disproven.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["curl -s -o /dev/null -w '%{http_code}' --max-time 12 against three hosts"],
+      "confidence": "high"
+    },
+    {
+      "claim": "GitHub CLI authenticated as arena-ai-coding-agent[bot] via GH_TOKEN with HTTPS configured; git and PR operations are available.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["gh auth status"],
+      "confidence": "high"
+    },
+    {
+      "claim": "No provider credentials exist anywhere in the workspace: no .env, no cookie/token cache, no contents at UPSTAGE_CACHE_DIR or MERCURY_CACHE_DIR. Live end-to-end testing is blocked pending user-supplied credentials via a protected mechanism.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["find over repo; ls of cache dirs; absence of .env in the 18-file listing"],
+      "confidence": "high"
+    },
+    {
+      "claim": "No MCP server is configured for serv__ (.mcp.json absent). The bundle's tessl MCP server, the affaan-m/ECC plugin marketplace, and the agent-launcher hooks were all reviewed and deliberately NOT activated.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["ls /home/user/serv__/.mcp.json -> No such file", "cat of bundle .mcp.json and .claude/settings.json", "full read of agent-launcher/hooks/*.py"],
+      "confidence": "high"
+    },
+    {
+      "claim": "ADUSKILLS bundle integrity: python3 scripts/verify-bundle.py -> 'skills=16/16 licenses=0' + 'bundle verification: PASS', exit 0, re-run successfully from /home/user/aduskills after relocation. python3 scripts/verify-activation.py -> 'missing activation files: AGENTS.md', exit 1.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["both scripts read in full before execution (stdlib-only, read-only, no network, no subprocess), then run"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Prompt-injection scan of all 5,728 bundle files found no injection. 'ignore previous instructions' appears in 3 files, all detection examples inside skill-security-auditor tagged '<!-- noqa: SEC-AUDITOR -->'. 'do not tell the user' appears once, as an investment-advice boundary. All secret-shaped strings are published test fixtures (AKIAIOSFODNN7EXAMPLE, ghp_aaaa..., sk-ant-aaaa...).",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["rg -i over the bundle for override phrases, key material, and RCE patterns; each hit read in context"],
+      "confidence": "high"
+    },
+    {
+      "claim": "An earlier broad 'curl|sh' scan reporting 3,356 files was a regex artifact (alternation matched the substring 'sh'), not a finding. It is discarded as invalid evidence and must not be cited.",
+      "classification": "OBSERVED",
+      "evidence": ["pattern semantics; no hit was inspected as a real pipe-to-shell"],
+      "confidence": "high"
+    },
+    {
+      "claim": "All 16 Python files in serv__ compile cleanly under Python 3.11.2 (python3 -m py_compile -> OK=16, FAIL=0): 12 in 'My PREVIOUS ENTIRE SERVER/' and 4 in 'New Upstage Change Logs/'. This is syntax-only proof; it does not show imports resolve or that any behaviour is correct, since no dependency is installed. __pycache__ was removed afterwards and git diff --stat HEAD is empty, confirming no tracked file was modified.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["find . -name '*.py' -print0 | while IFS= read -r -d '' f; do python3 -m py_compile \"$f\"; done -> compiled OK=16 FAIL=0", "git diff --stat HEAD -> empty"],
+      "confidence": "high"
+    },
+    {
+      "claim": "LEARNING: repository paths contain spaces ('My PREVIOUS ENTIRE SERVER/', 'New Upstage Change Logs/'). An unquoted $(find ...) loop word-split every path and produced 64 false syntax failures before being caught and re-run null-delimited. Any shell iteration over this repo must use -print0 with read -r -d '' or explicit quoting.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["first run: FAIL=64 with '[Errno 2] No such file or directory: ./My'; corrected run: OK=16 FAIL=0"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Sandbox persistence: only files under /home/user are captured in snapshots; /tmp is ephemeral. Persisted-artifact budget is roughly 128 MB / 10,000 files combined. The relocated bundle occupies 48 MB / 5,728 files outside Git.",
+      "classification": "SOURCE_SUPPORTED",
+      "evidence": ["host environment specification", "du -sh and find | wc -l on /home/user/aduskills"],
+      "confidence": "high"
+    }
+  ],
+  "edges": [
+    {"type": "VERIFIED_BY", "target": "state/environment-inventory.md and state/activation-log.md"},
+    {"type": "AFFECTS", "target": "RISK-20260923-runtime-unverified"},
+    {"type": "CONSTRAINS", "target": "GOAL-20260923-activate-aduskills"},
+    {"type": "RELATED_TO", "target": "PROJECT-20260923-serv-llm-gateway"}
+  ],
+  "source": "direct tool output, 2026-09-23",
+  "sensitivity": "internal",
+  "retention": "session+project",
+  "status": "active",
+  "created_at": "2026-09-23",
+  "updated_at": "2026-09-23",
+  "last_verified_at": "2026-09-23"
+}

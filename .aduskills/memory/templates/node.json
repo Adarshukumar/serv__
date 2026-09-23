@@ -1,0 +1,15 @@
+{
+  "id": "TYPE-YYYYMMDD-slug",
+  "type": "PROJECT",
+  "title": "",
+  "summary": "",
+  "facts": [{"claim":"", "classification":"OBSERVED", "evidence":[], "confidence":"high"}],
+  "edges": [{"type":"RELATED_TO", "target":""}],
+  "source": "",
+  "sensitivity": "internal",
+  "retention": "project",
+  "status": "active",
+  "created_at": "",
+  "updated_at": "",
+  "last_verified_at": ""
+}

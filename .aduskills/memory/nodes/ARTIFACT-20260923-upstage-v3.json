@@ -1,0 +1,70 @@
+{
+  "id": "ARTIFACT-20260923-upstage-v3",
+  "type": "ARTIFACT",
+  "title": "Upstage provider v3 — async curl_cffi rewrite",
+  "summary": "'New Upstage Change Logs/' contains a v3 rewrite of the Upstage provider that removes requests, DrissionPage, and thread bridges in favour of a single asyncio loop over curl_cffi AsyncSession, plus a pytest suite, an interactive REPL, and a usage demo.",
+  "facts": [
+    {
+      "claim": "Four files: upstage_provider.py (1374 lines), test_upstage.py (865), upstage_interactive.py (403), upstage_usage.py (207).",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["wc -l 'New Upstage Change Logs'/*.py"],
+      "confidence": "high"
+    },
+    {
+      "claim": "v3 docstring states the design goal: '100% asyncio - one event loop, zero thread bridges', 'curl_cffi ONLY - Chrome TLS impersonation', 'NO requests - NO DrissionPage - NO threads - NO fake hi prompt'. It notes v2 ran the completion stream in a worker thread with plain requests + queue polling.",
+      "classification": "OBSERVED",
+      "evidence": ["upstage_provider.py docstring lines 1-40"],
+      "confidence": "high"
+    },
+    {
+      "claim": "v3's public method set is a strict superset of v2's. All 40 method names found in Upstage.py also appear in upstage_provider.py; v3 adds stream, _events_with_retry, _cookies_from, and the usage classes TurnUsage/SessionUsage/ThinkSplitter/StreamEvent.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["rg -o '^    (async )?def (\\w+)' on both files, sorted and diffed"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Both versions expose the same class name UpstageProvider and the same fluent setters set_model/set_system/set_search/set_temperature/set_max_tokens, plus connect, chat, close, refresh_credentials, clear_credentials, list_models, available_models, model_info, get_sources*, new_session, clear_history, get_history.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["method-name diff as above"],
+      "confidence": "high"
+    },
+    {
+      "claim": "v3 signature changes exist below the surface: _SSE.parse_line(line) returns List[Tuple[str,str]] in v3 vs Optional[Tuple[str,str]] with an in_think accumulator in v2; _Creds.__init__ takes Optional[Path]=None in v3 vs a module-level _CRED_FILE default in v2. A drop-in swap therefore needs review, not blind copying.",
+      "classification": "OBSERVED",
+      "evidence": ["Upstage.py:160 vs upstage_provider.py:237", "Upstage.py:312 vs upstage_provider.py:611"],
+      "confidence": "high"
+    },
+    {
+      "claim": "test_upstage.py splits into an always-runnable offline suite (parser, splitter, sources, models, payload, stream assembly from canned events, creds, usage) and a live suite gated on UPSTAGE_LIVE=1 (connect, realtime stream, search, multi-turn, fresh credential capture). Intended runner: python3 -m pytest test_upstage.py -v.",
+      "classification": "OBSERVED",
+      "evidence": ["test_upstage.py docstring lines 1-16"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Neither pytest nor curl_cffi is installed in this sandbox, so no part of the v3 suite has been executed. Zero runtime evidence exists for v3 behaviour.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["python3 -m pip list -> only pip, setuptools, wheel"],
+      "confidence": "high"
+    },
+    {
+      "claim": "v3 does not import DrissionPage; the only DrissionPage import in the repo is Upstage.py line 44 ('from DrissionPage import ChromiumPage, ChromiumOptions'). If v3 replaces v2, DrissionPage plus chromium, chromium-driver and xvfb become removable from requirements.txt and the Dockerfile.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["rg -n -i drissionpage across repo: 9 matches in 4 files; only one is a Python import"],
+      "confidence": "high"
+    }
+  ],
+  "edges": [
+    {"type": "DERIVED_FROM", "target": "PROJECT-20260923-serv-llm-gateway"},
+    {"type": "SUPERSEDES", "target": "My PREVIOUS ENTIRE SERVER/API/providers/Upstage.py (v2) — PROPOSED, not yet decided or executed"},
+    {"type": "VERIFIED_BY", "target": "EVIDENCE-20260923-environment-inventory"},
+    {"type": "AFFECTS", "target": "RISK-20260923-runtime-unverified"},
+    {"type": "RELATED_TO", "target": "QUESTION-20260923-work-objective"}
+  ],
+  "source": "direct inspection of 'New Upstage Change Logs/' and 'My PREVIOUS ENTIRE SERVER/API/providers/Upstage.py'",
+  "sensitivity": "internal",
+  "retention": "project",
+  "status": "active",
+  "created_at": "2026-09-23",
+  "updated_at": "2026-09-23",
+  "last_verified_at": "2026-09-23"
+}

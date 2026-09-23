@@ -1,0 +1,64 @@
+{
+  "id": "DECISION-20260923-minimal-footprint-install",
+  "type": "DECISION",
+  "title": "Install ADUSKILLS with a minimal in-repo footprint",
+  "summary": "Chose a 14-file / 72 KB control plane inside the serv__ Git repo plus the full 48 MB / 5,728-file bundle outside Git at /home/user/aduskills, rather than vendoring the whole bundle into the repository or keeping it only in ephemeral /tmp.",
+  "facts": [
+    {
+      "claim": "DECISION: .aduskills/ holds the activation docs, policies, licences, memory, and state (Git-tracked, reviewable). /home/user/aduskills/ holds the full skill library (reachable by path, untracked). A root AGENTS.md points at both.",
+      "classification": "OBSERVED",
+      "evidence": ["find .aduskills -type f -> 14 files", "du -sh .aduskills -> 72K", "du -sh /home/user/aduskills -> 48M"],
+      "confidence": "high"
+    },
+    {
+      "claim": "REJECTED alternative 1 - vendor all 5,728 files into serv__: would consume 57% of the sandbox's ~10,000-file persisted-artifact budget, bury the user's 18-file server under unrelated finance/marketing/C-level libraries, and violate least privilege and no-hidden-expansion.",
+      "classification": "INFERRED",
+      "evidence": ["host artifact budget ~128 MB / 10,000 files", "bundle top-level dirs include finance/, marketing/, c-level-advisor/, business-*/"],
+      "confidence": "high"
+    },
+    {
+      "claim": "REJECTED alternative 2 - leave the bundle in /tmp only: /tmp is ephemeral and not captured in snapshots, so skills and memory would vanish between sessions, breaking ADUSKILLS section 6 memory-loss prevention.",
+      "classification": "SOURCE_SUPPORTED",
+      "evidence": ["host persistence rule: only files under /home/user are captured"],
+      "confidence": "high"
+    },
+    {
+      "claim": "REJECTED alternative 3 - install nothing and keep the protocol in context only: activation would not survive the session and no handoff or graph memory could persist.",
+      "classification": "INFERRED",
+      "evidence": ["ACTIVATE.md 'Session state' - activation lasts for the current session and workspace"],
+      "confidence": "medium"
+    },
+    {
+      "claim": "Trade-off accepted: skills are resolved from an absolute out-of-repo path, so the setup is machine-specific rather than portable with the repo. Documented in state/skills-route.md with the re-fetch source (github.com/Adarshukumar/aduskill, HTTP 200) and the instruction to re-run verify-bundle.py after any re-fetch.",
+      "classification": "OBSERVED",
+      "evidence": ["state/skills-route.md 'Path resolution' section"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Reversibility: this is an additive change on branch arena/01a0ccca-serv with no tracked file modified, so it can be undone by deleting .aduskills/ and AGENTS.md. Disclosed to the user as assumption A1 in the Intent Contract and offered for reversal.",
+      "classification": "OBSERVED",
+      "evidence": ["git status: only untracked additions"],
+      "confidence": "high"
+    },
+    {
+      "claim": "Related deliberate non-decisions: bundle .mcp.json (tessl) not activated; .claude/settings.json marketplace affaan-m/ECC not enabled; agent-launcher hooks not installed; restricted-defensive-validation left disabled per manifest default.",
+      "classification": "OBSERVED",
+      "evidence": ["state/activation-log.md section A items 4-5", "ADUSKILLS-MANIFEST.json restricted_validation_default: disabled"],
+      "confidence": "high"
+    }
+  ],
+  "edges": [
+    {"type": "DECIDED_BY", "target": "agent, under ADUSKILLS sections 2.5, 2.8, and 4 (harmless reversible detail - default chosen and disclosed)"},
+    {"type": "IMPLEMENTS", "target": "GOAL-20260923-activate-aduskills"},
+    {"type": "IMPLEMENTS", "target": "ARTIFACT-20260923-aduskills-control-plane"},
+    {"type": "CONSTRAINS", "target": "PROJECT-20260923-serv-llm-gateway"},
+    {"type": "DERIVED_FROM", "target": "EVIDENCE-20260923-environment-inventory"}
+  ],
+  "source": "activation, 2026-09-23",
+  "sensitivity": "internal",
+  "retention": "project",
+  "status": "active",
+  "created_at": "2026-09-23",
+  "updated_at": "2026-09-23",
+  "last_verified_at": "2026-09-23"
+}

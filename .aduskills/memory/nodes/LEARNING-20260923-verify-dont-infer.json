@@ -1,0 +1,69 @@
+{
+  "id": "LEARNING-20260923-verify-dont-infer",
+  "type": "LEARNING",
+  "title": "Read the value; do not infer it from a neighbouring name",
+  "summary": "I reported a confirmed cross-source data mismatch that did not exist, because I inferred a dictionary key from a related identifier instead of reading it. The error survived into a written design document before a verification pass caught it. Generalises well beyond this task.",
+  "facts": [
+    {
+      "claim": "WHAT HAPPENED: Models.py maps the Upstage model 'solar-mini' to connection id 'upstage/solar-1-mini-chat'. I checked that id against a set of upstage_provider.py _MODELS keys that I had CONSTRUCTED AS {solar-pro3, solar-pro2, syn-pro, solar-mini} - the fourth entry inferred from the registry's model NAME, not read from the source. The id 'failed' the check, so I reported finding I-4: a silent fallback to solar-pro3's config giving the wrong context window and enabling search on a model that does not support it. v3's actual fourth key is literally 'upstage/solar-1-mini-chat'. There was no mismatch.",
+      "classification": "OBSERVED",
+      "evidence": ["python3 dump of load_upstage_v3_models() -> keys ['solar-pro3','solar-pro2','syn-pro','upstage/solar-1-mini-chat']", "side-by-side comparison: all 4 ids, capabilities and max_tokens agree across Models.py and upstage_provider.py"],
+      "confidence": "high"
+    },
+    {
+      "claim": "WHY IT SLIPPED THROUGH: the first three keys really were the bare names, so a pattern was established and the fourth was extrapolated. The check was written to CONFIRM a suspicion rather than to test it, and the generator's 'reconcile' counter reported 0 - which was the tell, but was initially read as the fix not firing rather than as the premise being false.",
+      "classification": "INFERRED",
+      "evidence": ["the earlier hardcoded set used in the first check", "'Upstage ids reconciled to v3: 0' in the first generator run"],
+      "confidence": "high"
+    },
+    {
+      "claim": "WHAT CAUGHT IT: printing the actual extracted dictionary rather than trusting the comparison result. Cost of the check was one command.",
+      "classification": "OBSERVED",
+      "evidence": ["the debug run that printed v3 _MODELS keys and cfg"],
+      "confidence": "high"
+    },
+    {
+      "claim": "RULE ADOPTED: when comparing two sources, print both sides before asserting a difference. A mismatch claim requires the actual value from BOTH sources in evidence, never one side inferred from the other. A counter that reports zero work done is a signal to question the premise, not the mechanism.",
+      "classification": "PROPOSED",
+      "evidence": ["ADUSKILLS section 9: OBSERVED vs INFERRED must be distinguished; a claim becomes durable only when supported by evidence"],
+      "confidence": "high"
+    },
+    {
+      "claim": "REMEDIATION: the finding was retracted in place rather than quietly deleted - ARCHITECTURE.md I-4 now reads RETRACTED with the reasoning and the corrected values. The bogus 'reconcile' rewrite was replaced by an assertion that fails the build if the two sources ever genuinely drift, which is the useful version of the mistaken idea.",
+      "classification": "OBSERVED",
+      "evidence": ["ARCHITECTURE.md section 6 I-4", "scripts/dump_registry.py apply_provider_fixes docstring"],
+      "confidence": "high"
+    },
+    {
+      "claim": "SECOND INSTANCE IN THE SAME SESSION, different shape: an initial CORS probe reported 'Access-Control-Allow-Origin ABSENT -> browser BLOCKS the call' for all six providers. In fact curl had received NO RESPONSE AT ALL (exit 35, SSL_ERROR_SYSCALL) because the sandbox blocks TLS egress to those hosts. 'Header missing' and 'host unreachable' are different facts with different conclusions; the probe conflated them. Fixed by capturing curl exit codes plus control hosts (github/pypi) to prove the restriction was targeted.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["first probe: all six '<no response>' yet labelled ACAO ABSENT", "second probe: curl_exit=35 SSL_ERROR_SYSCALL for all six, exit=0 http=404/200 for the two controls"],
+      "confidence": "high"
+    },
+    {
+      "claim": "THIRD INSTANCE: an unquoted $(find ...) loop word-split repository paths containing spaces and reported 64 bogus Python syntax failures. The correct answer was 16 files compiling cleanly. Re-run with -print0 and read -r -d '' before believing any of it.",
+      "classification": "TOOL_VERIFIED",
+      "evidence": ["first run FAIL=64 with '[Errno 2] No such file or directory: ./My'", "corrected run OK=16 FAIL=0"],
+      "confidence": "high"
+    },
+    {
+      "claim": "PATTERN: all three errors were cases of a tool result being interpreted past what it actually established - an inferred key treated as read, an empty response treated as a missing header, a shell failure treated as a code failure. In each case the fix was to make the tool print more, not to reason harder.",
+      "classification": "INFERRED",
+      "evidence": ["the three instances above"],
+      "confidence": "medium"
+    }
+  ],
+  "edges": [
+    {"type": "DERIVED_FROM", "target": "ARTIFACT-20260923-app-react-migration"},
+    {"type": "RELATED_TO", "target": "EVIDENCE-20260923-environment-inventory"},
+    {"type": "MITIGATES", "target": "RISK-20260923-runtime-unverified"},
+    {"type": "AFFECTS", "target": "PROJECT-20260923-serv-llm-gateway"}
+  ],
+  "source": "react migration work, 2026-09-23",
+  "sensitivity": "internal",
+  "retention": "durable",
+  "status": "active",
+  "created_at": "2026-09-23",
+  "updated_at": "2026-09-23",
+  "last_verified_at": "2026-09-23"
+}

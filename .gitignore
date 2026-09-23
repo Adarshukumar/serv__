@@ -1,0 +1,43 @@
+# ── Node / frontend ────────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+.eslintcache
+
+# ── Python ─────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# ── Secrets & credential caches ────────────────────────────────
+# The providers authenticate with CAPTURED BROWSER SESSION material (cookies +
+# CSRF tokens), cached to disk. None of it may ever be committed.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.*
+credentials.json
+.cache/
+mercury/
+upstage/
+
+# ── Editor / OS ────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# ── Logs ───────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

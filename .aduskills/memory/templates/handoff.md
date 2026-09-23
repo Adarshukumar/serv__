@@ -1,0 +1,13 @@
+# ADUSKILLS Handoff
+- Objective:
+- Intent Contract:
+- Current status: complete | partial | blocked | failed
+- Completed artifacts:
+- Verification evidence:
+- Decisions and rationale:
+- Open tasks:
+- Blockers:
+- Pending user questions/approvals:
+- Risks and mitigations:
+- Rollback path:
+- Exact next action:
