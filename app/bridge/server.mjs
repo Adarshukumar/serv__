@@ -312,7 +312,7 @@ const server = http.createServer(async (req, res) => {
     const out = await establishUpstageSession();
     // Never echo cookie VALUES back to the browser — names only.
     const { cookies, ...safe } = out;
-    json(res, out.ok ? 200 : 502, { ...safe, cookieNames: Object.keys(cookies || {}) });
+    sendJson(res, out.ok ? 200 : 502, { ...safe, cookieNames: Object.keys(cookies || {}) });
     return;
   }
 
