@@ -16,9 +16,12 @@ import {
   setUpstageCsrf,
   getMercuryToken,
   setMercuryToken,
+  setUpstageSessionId,
+  getUpstageSessionId,
   fetchMercurySession,
   mercuryProxyNotice,
 } from './lib/direct.ts';
+import { getCsrf, clearCreds } from './lib/upstageSession.ts';
 import type { WireFormat } from './types';
 import Sidebar, { type Selection } from './components/Sidebar.tsx';
 import Message from './components/Message.tsx';
@@ -85,7 +88,37 @@ export default function App() {
     setMercuryToken(v);
     setKeyMsg(v.trim() ? 'Mercury session token saved to this browser only.' : 'Mercury token cleared.');
   };
+  const [busy, setBusy] = useState<'upstage' | 'mercury' | null>(null);
+  const [sid, setSid] = useState(() => getUpstageSessionId());
+
+  // Runs the SAME Next.js RSC pipeline the Python client runs: load the console
+  // page, find the getConsoleCsrfToken server-action id in its JS chunks, then
+  // POST to it and read the JWT out of the flight response.
+  const establishUpstage = async () => {
+    setBusy('upstage');
+    setKeyMsg('Establishing Upstage session \u2014 loading console.upstage.ai/playground/chat\u2026');
+    const r = await getCsrf();
+    if ('csrf' in r) {
+      saveCsrf(r.csrf);
+      setSid(r.sessionId);
+      setUpstageSessionId(r.sessionId);
+      setKeyMsg(`Upstage session established. CSRF captured, x-session-id = ${r.sessionId.slice(0, 8)}\u2026`);
+    } else {
+      setKeyMsg(r.error);
+    }
+    setBusy(null);
+  };
+
+  const resetUpstage = () => {
+    clearCreds();
+    saveCsrf('');
+    setSid('');
+    setUpstageSessionId('');
+    setKeyMsg('Upstage credentials cleared.');
+  };
+
   const grabMercury = async () => {
+    setBusy('mercury');
     setKeyMsg('Requesting a Mercury session directly from chat.inceptionlabs.ai\u2026');
     const r = await fetchMercurySession();
     if (r.token) {
@@ -94,6 +127,7 @@ export default function App() {
     } else {
       setKeyMsg(`Could not capture a Mercury session: ${r.error}`);
     }
+    setBusy(null);
   };
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -333,17 +367,42 @@ export default function App() {
             </p>
 
             <label className="field">
-              <span>Upstage CSRF token</span>
-              <input
-                type="password"
-                value={csrf}
-                onChange={(e) => saveCsrf(e.target.value)}
-                placeholder="paste from console.upstage.ai"
-                spellCheck={false}
-              />
+              <span>Upstage session</span>
+              <div className="row">
+                <input
+                  type="password"
+                  value={csrf}
+                  onChange={(e) => saveCsrf(e.target.value)}
+                  placeholder="x-csrf-token (JWT)"
+                  spellCheck={false}
+                />
+                <button className="btn" onClick={establishUpstage} disabled={busy !== null}>
+                  {busy === 'upstage' ? 'Establishing\u2026' : 'Establish session'}
+                </button>
+                <button className="btn ghost" onClick={resetUpstage} disabled={busy !== null}>
+                  Reset
+                </button>
+              </div>
               <span className="dim">
-                Sign in at console.upstage.ai in this same browser first; the session cookie rides
-                along automatically. The CSRF token is sent as <code>x-csrf-token</code>.
+                <b>Establish session</b> runs the same pipeline your Python client runs: load{' '}
+                <code>console.upstage.ai/playground/chat</code>, find the{' '}
+                <code>getConsoleCsrfToken</code> server-action id inside its JS chunks, POST to it and
+                read the JWT out of the flight response. Sends <code>x-csrf-token</code>,{' '}
+                <code>x-session-id</code> and <code>x-upstage-logging-enabled</code>.
+              </span>
+              {sid && (
+                <span className="dim">
+                  <code>x-session-id</code> = <code>{sid}</code>
+                </span>
+              )}
+              <span className="dim" style={{ color: 'var(--warn)' }}>
+                Known limit, and it is a proof not a guess: your Python client attaches the console's
+                cookies to the API request <b>manually</b>, because <code>console.upstage.ai</code> and{' '}
+                <code>ap-northeast-2.apistage.ai</code> are different registrable domains
+                (<code>upstage.ai</code> vs <code>apistage.ai</code>). A browser cannot read another
+                site's cookies, so it cannot forward them. If the API insists on them, Upstage needs{' '}
+                <code>transport:'bridge'</code> — Node holds a real cookie jar. Paste a token
+                manually to try without one.
               </span>
             </label>
 
@@ -357,7 +416,9 @@ export default function App() {
                   placeholder="x-session-token"
                   spellCheck={false}
                 />
-                <button className="btn" onClick={grabMercury}>Fetch session</button>
+                <button className="btn" onClick={grabMercury} disabled={busy !== null}>
+                  {busy === 'mercury' ? 'Fetching\u2026' : 'Fetch session'}
+                </button>
               </div>
               <span className="dim">
                 "Fetch session" POSTs directly to <code>chat.inceptionlabs.ai/api/session</code>. Sent

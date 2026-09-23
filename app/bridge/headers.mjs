@@ -29,8 +29,9 @@ export const HEADERS = {
     'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
     Connection: 'keep-alive',
     'Content-Type': 'application/json',
-    Origin: 'https://deepinfra.com',
-    Referer: 'https://deepinfra.com',
+    // DeepInfra.py:34  _ORIGIN = "https://g4f.dev"  — NOT deepinfra.com.
+    Origin: 'https://g4f.dev',
+    Referer: 'https://g4f.dev',
     'x-request-id': 'Ry3LRoEwEsPHJxUrUrYpfCzm',
     'sec-ch-ua': '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
     'sec-ch-ua-mobile': '?0',
@@ -95,11 +96,17 @@ export const HEADERS = {
     'sec-fetch-site': 'same-origin',
   },
 
+  // upstage_provider.py _stream_events() — the ACTUAL request headers.
+  // accept is */* (not text/event-stream) and three x- headers are
+  // load-bearing: x-csrf-token and x-session-id are attached at runtime from
+  // the captured session. An earlier revision invented this set and omitted
+  // all three, so Upstage could never authenticate.
   Upstage: {
-    Accept: 'text/event-stream',
-    'Content-Type': 'application/json',
-    Origin: 'https://console.upstage.ai',
-    Referer: 'https://console.upstage.ai/',
+    accept: '*/*',
+    'content-type': 'application/json',
+    origin: 'https://console.upstage.ai',
+    referer: 'https://console.upstage.ai/',
+    'x-upstage-logging-enabled': 'true',
     'User-Agent': UA_CHROME_146,
   },
 };
@@ -114,7 +121,20 @@ export const ENDPOINTS = {
   MercurySession: 'https://chat.inceptionlabs.ai/api/session',
   Upstage: 'https://ap-northeast-2.apistage.ai/v1/web/demo/chat/completions?include_think=true',
   UpstageConsole: 'https://console.upstage.ai',
+  // upstage_provider.py:99 _CHAT_EP — the Next.js page whose client bundles
+  // embed the server-action id, and the endpoint the RSC POST goes to.
+  UpstageChatEp: 'https://console.upstage.ai/playground/chat',
 };
+
+/**
+ * Upstage's API host is a DIFFERENT registrable domain from the console
+ * (apistage.ai vs upstage.ai), so the Python client attaches the console's
+ * cookies to the API request MANUALLY. A browser cannot read another site's
+ * cookies and cannot forward them cross-site, which is why Upstage is the one
+ * provider a pure browser SPA provably cannot authenticate against. Node can,
+ * because it holds its own cookie jar.
+ */
+export const UPSTAGE_NEEDS_COOKIE_JAR = true;
 
 /**
  * Inception.py hardcodes an upstream HTTP proxy for credential capture.

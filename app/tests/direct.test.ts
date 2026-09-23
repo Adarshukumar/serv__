@@ -322,17 +322,27 @@ test('connection: CORS/network failure yields an actionable error naming the hos
   }
 });
 
-test('connection: HTTP 403 on Upstage points at the credentials panel', async () => {
+test('connection: HTTP 403 on the Upstage CHAT request points at the keys panel', async () => {
   const real = globalThis.fetch;
-  globalThis.fetch = (async () => new Response('forbidden', { status: 403 })) as typeof fetch;
+  // Pin a CSRF so the credential bootstrap is skipped and the 403 genuinely comes
+  // from the chat endpoint. Without this the test passes for the wrong reason: the
+  // bootstrap's own failure message also contains "HTTP 403" and "CSRF".
+  setUpstageCsrf('test-csrf-pinned');
+  let hitChat = false;
+  globalThis.fetch = (async (u: any) => {
+    if (String(u).includes('apistage.ai')) hitChat = true;
+    return new Response('forbidden', { status: 403 });
+  }) as typeof fetch;
   try {
     const events = await collect(streamDirect(req({ provider: 'Upstage', modelId: 'solar-pro3' })));
+    assert.ok(hitChat, 'the chat endpoint must actually have been called');
     const err = events.find((e) => e.kind === 'error') as any;
     assert.ok(err);
     assert.match(err.message, /HTTP 403/);
     assert.match(err.message, /CSRF/, 'must tell the user which credential is missing');
     assert.equal(err.retryable, false, '403 is not retryable');
   } finally {
+    setUpstageCsrf('');
     globalThis.fetch = real;
   }
 });
@@ -340,6 +350,10 @@ test('connection: HTTP 403 on Upstage points at the credentials panel', async ()
 test('connection: abort mid-stream flushes held-back text instead of dropping it', async () => {
   const real = globalThis.fetch;
   const ctrl = new AbortController();
+  // Pin a CSRF so this exercises the STREAMING path. Without one, streamDirect
+  // first runs the RSC credential bootstrap, which this global fetch stub would
+  // also intercept — testing the wrong thing and leaving promises pending.
+  setUpstageCsrf('test-csrf-pinned');
   // Honour the signal, so this is a genuine abort and not a stream that merely
   // happens to finish. The provider sends one chunk ending in a partial tag,
   // then stalls forever until aborted.
@@ -381,6 +395,7 @@ test('connection: abort mid-stream flushes held-back text instead of dropping it
     assert.equal(done.finishReason, 'aborted', 'and must report why');
     assert.ok(!events.some((e) => e.kind === 'error'), 'an abort is not an error');
   } finally {
+    setUpstageCsrf('');
     globalThis.fetch = real;
   }
 });

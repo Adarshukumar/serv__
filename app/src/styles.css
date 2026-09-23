@@ -437,3 +437,10 @@ textarea.input::placeholder { color: var(--text-faint); }
   border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
 }
 .keys .notice { max-width: none; margin-top: 4px; }
+
+.btn.ghost {
+  background: transparent; border-color: var(--line); color: var(--text-dim);
+}
+.btn.ghost:hover { background: var(--bg-hover); color: var(--text); border-color: var(--line); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.field .row input { flex: 1; min-width: 0; }

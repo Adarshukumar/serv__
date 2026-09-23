@@ -20,6 +20,7 @@ import { providerMeta } from '../data/providers.ts';
 import { SSEFramer, parseData } from './sse.ts';
 import { createNormalizer, createDolphinNormalizer, type Normalizer } from './normalizers.ts';
 import { ENDPOINTS, splitHeaders, MERCURY_HARDCODED_PROXY } from './headers.ts';
+import { getCsrf, loadCreds as loadUpstageCreds } from './upstageSession.ts';
 import {
   deepInfraPayload,
   mCloudFlarePayload,
@@ -33,6 +34,7 @@ import {
 // ── credentials the browser holds locally, never sent anywhere else ──────
 const LS = {
   upstageCsrf: 'upstage.csrf',
+  upstageSessionId: 'upstage.sessionId',
   mercuryToken: 'mercury.sessionToken',
   mercuryProxy: 'mercury.useHardcodedProxy',
 } as const;
@@ -72,6 +74,15 @@ export const setUpstageCsrf = (v: string) => store().set(LS.upstageCsrf, v.trim(
 export const getMercuryToken = () => store().get(LS.mercuryToken);
 export const setMercuryToken = (v: string) => store().set(LS.mercuryToken, v.trim());
 
+/** Upstage's x-session-id: cookies.session_id from the captured creds, else a uuid. */
+export function getUpstageSessionId(): string {
+  const cached = loadUpstageCreds();
+  if (cached?.sessionId) return cached.sessionId;
+  const manual = store().get(LS.upstageSessionId);
+  return manual;
+}
+export const setUpstageSessionId = (v: string) => store().set(LS.upstageSessionId, v.trim());
+
 export interface ResolvedRequest {
   /** The real provider URL that will be hit. */
   url: string;
@@ -84,8 +95,18 @@ export interface ResolvedRequest {
   provider: string;
 }
 
+/** Credentials resolved before the request is built (see streamDirect). */
+export interface ResolvedCreds {
+  /** Upstage: the JWT from the RSC server action. */
+  upstageCsrf?: string;
+  /** Upstage: cookies.session_id, or a generated uuid — sent as x-session-id. */
+  upstageSessionId?: string;
+  /** Mercury: the token from GET /api/session. */
+  mercuryToken?: string;
+}
+
 /** Build the exact request for a provider. Exported so tests can assert on it. */
-export function resolveRequest(req: ChatRequest): ResolvedRequest {
+export function resolveRequest(req: ChatRequest, creds: ResolvedCreds = {}): ResolvedRequest {
   const meta = providerMeta(req.provider);
   const wire = meta.wire;
   const { settable, forbidden } = splitHeaders(req.provider);
@@ -116,17 +137,26 @@ export function resolveRequest(req: ChatRequest): ResolvedRequest {
     }
 
     case 'Mercury': {
-      const token = getMercuryToken();
+      // Inception.py _hdrs(): "x-session-token": state["token"]. A pasted token
+      // wins; otherwise use one captured from GET /api/session this session.
+      const token = getMercuryToken() || creds.mercuryToken || '';
       if (token) headers['x-session-token'] = token;
       body = mercuryPayload(req);
       break;
     }
 
     case 'Upstage': {
-      const csrf = getUpstageCsrf();
+      // upstage_provider.py _stream_events() — three x- headers, all required.
+      // A pasted CSRF wins (manual override); otherwise use the captured one.
+      const csrf = getUpstageCsrf() || creds.upstageCsrf || '';
       if (csrf) headers['x-csrf-token'] = csrf;
-      // Cookie rides along automatically when the user is signed into the
-      // Upstage console AND the provider's cookie is SameSite=None.
+      const sid = creds.upstageSessionId || getUpstageSessionId();
+      if (sid) headers['x-session-id'] = sid;
+      // The Python client ALSO attaches the console's cookies manually, because
+      // the API host (apistage.ai) is a different site from console.upstage.ai.
+      // A browser cannot read another site's cookies, so this is the one part of
+      // the Python flow that direct mode provably cannot reproduce. Reported to
+      // the caller rather than hidden.
       body = upstagePayload(req);
       break;
     }
@@ -147,23 +177,39 @@ export function resolveRequest(req: ChatRequest): ResolvedRequest {
 }
 
 /**
- * Mercury mints its session token from a separate endpoint. Called directly
- * from the browser so the token never transits a relay.
+ * Mercury mints its session token from a separate endpoint.
+ *
+ * Inception.py:385 — `self.scraper.get(self.session_url)`. It is a **GET** with
+ * no body, and the token is `data["token"]`. An earlier revision of this file
+ * sent a POST with a `"{}"` body, which was invented rather than read.
+ *
+ * Inception.py:382 also sleeps a random 1.5–4.0s before the call (rate-limit
+ * etiquette against a Cloudflare-protected host). Preserved, and skippable in
+ * tests via `opts.skipDelay`.
  */
-export async function fetchMercurySession(signal?: AbortSignal): Promise<{ token?: string; error?: string }> {
+export async function fetchMercurySession(
+  opts: { signal?: AbortSignal; skipDelay?: boolean; fetchImpl?: typeof fetch } = {},
+): Promise<{ token?: string; error?: string }> {
   const url = ENDPOINTS.MercurySession;
+  const doFetch = opts.fetchImpl ?? fetch;
   try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { accept: 'application/json', 'content-type': 'application/json' },
-      body: '{}',
-      signal,
+    if (!opts.skipDelay) {
+      await new Promise((r) => setTimeout(r, 1500 + Math.random() * 2500));
+    }
+    const res = await doFetch(url, {
+      method: 'GET',
+      headers: { accept: 'application/json' },
+      signal: opts.signal,
       credentials: 'include',
     });
+    if (res.status === 429) {
+      return { error: `GET ${url} returned HTTP 429 — Mercury is rate-limiting. Wait a minute and retry.` };
+    }
     if (!res.ok) return { error: `GET ${url} returned HTTP ${res.status}` };
-    const data = (await res.json()) as { token?: string; sessionToken?: string; id?: string };
-    const token = data.token ?? data.sessionToken ?? data.id;
-    if (!token) return { error: `${url} responded but carried no recognisable token field` };
+    const data = (await res.json()) as { token?: string };
+    // Inception.py:389 reads exactly `data.get("token")`. No fallback guessing.
+    const token = data.token;
+    if (!token) return { error: `${url} responded 200 but carried no "token" field` };
     setMercuryToken(token);
     return { token };
   } catch (err) {
@@ -205,7 +251,48 @@ export async function* streamDirect(
   req: ChatRequest,
   opts: DirectOptions = {},
 ): AsyncGenerator<StreamEvent, void, undefined> {
-  const resolved = resolveRequest(req);
+  // ── provider initialisation, mirroring the Python connect() flow ──
+  // Upstage and Mercury both mint a credential before the chat request; the
+  // other four providers are anonymous and need nothing.
+  const creds: ResolvedCreds = {};
+
+  if (req.provider === 'Upstage' && !getUpstageCsrf()) {
+    yield { kind: 'status', phase: 'connecting', detail: 'Establishing Upstage session (RSC credential pipeline)…' };
+    const r = await getCsrf({ signal: opts.signal });
+    if ('error' in r) {
+      yield {
+        kind: 'error',
+        retryable: false,
+        message:
+          `${r.error}  ·  Upstage's flow needs the console's session cookies attached to a request to a ` +
+          `DIFFERENT site (ap-northeast-2.apistage.ai), which a browser cannot do — it will not let ` +
+          `JavaScript read another site's cookies. Paste a CSRF token in the ⚿ keys panel to override, ` +
+          `or set Upstage's transport to 'bridge' so the local relay can run this identical capture ` +
+          `with a real cookie jar.`,
+      };
+      return;
+    }
+    creds.upstageCsrf = r.csrf;
+    creds.upstageSessionId = r.sessionId;
+  }
+
+  if (req.provider === 'Mercury' && !getMercuryToken()) {
+    yield { kind: 'status', phase: 'connecting', detail: 'Establishing Mercury session (GET /api/session)…' };
+    const r = await fetchMercurySession({ signal: opts.signal });
+    if (!r.token) {
+      yield {
+        kind: 'error',
+        retryable: true,
+        message:
+          `Could not establish a Mercury session: ${r.error}  ·  Paste a token in the ⚿ keys panel, ` +
+          `or set Mercury's transport to 'bridge'.`,
+      };
+      return;
+    }
+    creds.mercuryToken = r.token;
+  }
+
+  const resolved = resolveRequest(req, creds);
   opts.onMeta?.(resolved);
 
   yield { kind: 'status', phase: 'connecting', detail: resolved.url };

@@ -72,8 +72,11 @@ export const FULL_HEADERS: Record<string, Record<string, string>> = {
     'Accept-Language': 'en-GB,en-US;q=0.9,en;q=0.8',
     Connection: 'keep-alive',
     'Content-Type': 'application/json',
-    Origin: 'https://deepinfra.com',
-    Referer: 'https://deepinfra.com',
+    // DeepInfra.py:34  _ORIGIN = "https://g4f.dev"  — NOT deepinfra.com.
+    // Verified against source; an earlier revision of this file guessed
+    // "deepinfra.com" from the API host and was wrong.
+    Origin: 'https://g4f.dev',
+    Referer: 'https://g4f.dev',
     'x-request-id': 'Ry3LRoEwEsPHJxUrUrYpfCzm',
     'sec-ch-ua': '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
     'sec-ch-ua-mobile': '?0',
@@ -133,14 +136,27 @@ export const FULL_HEADERS: Record<string, Record<string, string>> = {
     'sec-fetch-dest': 'empty',
     'sec-fetch-mode': 'cors',
     'sec-fetch-site': 'same-origin',
+    // Inception.py _hdrs(): "x-session-token": state["token"] — the token
+    // harvested from GET /api/session. Attached at runtime.
   },
 
+  // ── upstage_provider.py _stream_events(), the ACTUAL request headers ──
+  // An earlier revision of this file invented an Upstage header set
+  // (Accept: text/event-stream and nothing else). The real one is below:
+  // accept is */*, and three x- headers are load-bearing. Without
+  // x-csrf-token / x-session-id the API rejects the request outright.
   Upstage: {
-    Accept: 'text/event-stream',
-    'Content-Type': 'application/json',
-    Origin: 'https://console.upstage.ai',
-    Referer: 'https://console.upstage.ai/',
+    accept: '*/*',
+    'content-type': 'application/json',
+    origin: 'https://console.upstage.ai',
+    referer: 'https://console.upstage.ai/',
+    'x-upstage-logging-enabled': 'true',
     'User-Agent': UA_CHROME_146,
+    // Added at runtime from the captured session — see upstageSession.ts:
+    //   'x-csrf-token':  <jwt from the RSC server action>
+    //   'x-session-id':  <cookies.session_id, or a generated uuid>
+    // Cookies from console.upstage.ai are attached MANUALLY by the Python
+    // client, because the API host (apistage.ai) is a different site.
   },
 };
 
@@ -154,6 +170,9 @@ export const ENDPOINTS: Record<string, string> = {
   MercurySession: 'https://chat.inceptionlabs.ai/api/session',
   Upstage: 'https://ap-northeast-2.apistage.ai/v1/web/demo/chat/completions?include_think=true',
   UpstageConsole: 'https://console.upstage.ai',
+  // upstage_provider.py:99  _CHAT_EP — the Next.js page whose client bundles
+  // embed the server-action id, and the endpoint the RSC POST is sent to.
+  UpstageChatEp: 'https://console.upstage.ai/playground/chat',
 };
 
 /**
