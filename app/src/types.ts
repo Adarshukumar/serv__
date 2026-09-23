@@ -85,10 +85,11 @@ export type WireFormat =
   | 'typed-events'
   | 'upstage-v3';
 
-/** How a provider is reached. 'direct' = browser→provider (only if that provider
- *  is ever confirmed to allow CORS and ignore Sec-Fetch-*); 'bridge' = via the
- *  local Node bridge, which is what the Python code effectively required. */
-export type Transport = 'bridge' | 'direct';
+/** How a provider is reached. 'direct' (the default) = the browser builds the
+ *  request and hits the provider's real URL, so that URL appears in the network
+ *  log. 'bridge' = opt-in fallback via the local Node relay, used only where a
+ *  provider's CORS policy blocks a browser from reading the response. */
+export type Transport = 'direct' | 'bridge';
 
 export interface ProviderMeta {
   id: ProviderId;

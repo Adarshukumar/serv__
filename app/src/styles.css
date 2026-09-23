@@ -366,3 +366,74 @@ textarea.input::placeholder { color: var(--text-faint); }
   .topbar { padding: 10px 14px; }
   .thread-inner, .composer { padding-left: 14px; padding-right: 14px; }
 }
+
+/* De-emphasised inline text (e.g. the "via …" line under a hit URL). */
+.dim {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+.notice code {
+  word-break: break-all;
+  font-family: var(--mono);
+  font-size: 12px;
+  background: rgba(127, 127, 127, 0.12);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+/* ── Credentials panel ───────────────────────────────────────────
+   Direct mode cannot capture a logged-in session for you (a browser will not
+   let JS read another site's cookies), so Upstage's CSRF token and Mercury's
+   session token are pasted in once and kept in localStorage only. */
+.keys {
+  margin: 10px 16px 0;
+  padding: 14px 16px;
+  background: var(--bg-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  max-width: 720px;
+}
+.keys-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px; font-size: 13.5px; color: var(--text);
+}
+.keys > .dim { margin: 0 0 12px; line-height: 1.55; }
+.field {
+  display: block; margin-bottom: 14px;
+}
+.field > span:first-child {
+  display: block; font-size: 12px; font-weight: 600;
+  color: var(--text-dim); margin-bottom: 5px;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.field input {
+  width: 100%; box-sizing: border-box;
+  background: var(--bg); border: 1px solid var(--line);
+  color: var(--text); border-radius: var(--radius-sm);
+  padding: 8px 11px; font-size: 13px; font-family: var(--mono);
+}
+.field input:focus {
+  outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.field .dim { display: block; margin-top: 5px; line-height: 1.5; }
+.row { display: flex; gap: 8px; align-items: stretch; }
+.row input { flex: 1; }
+.btn {
+  background: var(--accent-soft); border: 1px solid var(--accent);
+  color: var(--accent); border-radius: var(--radius-sm);
+  padding: 8px 14px; font-size: 12.5px; font-weight: 600;
+  white-space: nowrap; cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.btn:hover { background: var(--accent); color: #0a0b0f; }
+.keymsg {
+  margin-top: 10px; padding: 8px 12px; font-size: 12.3px; line-height: 1.5;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(52,211,153,.28); background: rgba(52,211,153,.07);
+  color: #b9f0d8;
+}
+.icon-btn.accent {
+  border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
+}
+.keys .notice { max-width: none; margin-top: 4px; }

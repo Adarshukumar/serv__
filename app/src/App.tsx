@@ -2,13 +2,24 @@
 //  App — one page. Sidebar (models by provider) + thread + composer.
 //
 //  All provider differences are absorbed below this component: it dispatches a
-//  ChatRequest to the bridge and folds unified StreamEvents into a message.
+//  ChatRequest and folds unified StreamEvents into a message. The default
+//  transport is DIRECT — the browser builds the request and hits the provider's
+//  real URL, so that URL is what appears in the DevTools network log.
 // ══════════════════════════════════════════════════════════════
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChatMessage, ChatRequest, Source, StreamEvent } from './types';
 import { MODELS } from './data/models';
 import { PROVIDERS, providerMeta } from './data/providers';
-import { streamChat, bridgeHealth } from './lib/bridge.ts';
+import { streamChat, connectivity } from './lib/stream.ts';
+import {
+  getUpstageCsrf,
+  setUpstageCsrf,
+  getMercuryToken,
+  setMercuryToken,
+  fetchMercurySession,
+  mercuryProxyNotice,
+} from './lib/direct.ts';
+import type { WireFormat } from './types';
 import Sidebar, { type Selection } from './components/Sidebar.tsx';
 import Message from './components/Message.tsx';
 import Composer from './components/Composer.tsx';
@@ -19,9 +30,9 @@ const DEFAULT_SYSTEM = 'You are a so powerful assistant powered by Adarsh Kumar.
 const uid = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 const SUGGESTIONS = [
-  'Why can’t a browser call these provider APIs directly?',
+  'Which headers is a browser forbidden from setting, and why?',
   'Explain the four SSE wire formats these providers use',
-  'What does the local egress bridge actually do?',
+  'How does Upstage v3 split <think> tags across stream chunks?',
   'Compare solar-pro3 and kimi-k2.5 for reasoning tasks',
 ];
 
@@ -50,8 +61,40 @@ export default function App() {
   const [streaming, setStreaming] = useState(false);
   const [search, setSearch] = useState(false);
   const [reasoning, setReasoning] = useState('low');
-  const [bridgeUp, setBridgeUp] = useState<boolean | null>(null);
-  const [bridgeErr, setBridgeErr] = useState<string | null>(null);
+  // The real provider URL of the most recent request, so the user can confirm
+  // in the UI that it matches what the network log shows.
+  const [lastHit, setLastHit] = useState<{ url: string; via: string; wire: WireFormat | null } | null>(null);
+  const [transportVia, setTransportVia] = useState<string>('direct');
+
+  // ── credentials ──
+  // Direct mode cannot capture a logged-in session for you: the browser will
+  // not let JS read another site's cookies. Upstage's CSRF token and Mercury's
+  // session token are therefore pasted in once and kept in localStorage only.
+  const [keysOpen, setKeysOpen] = useState(false);
+  const [csrf, setCsrf] = useState(() => getUpstageCsrf());
+  const [mtok, setMtok] = useState(() => getMercuryToken());
+  const [keyMsg, setKeyMsg] = useState<string | null>(null);
+
+  const saveCsrf = (v: string) => {
+    setCsrf(v);
+    setUpstageCsrf(v);
+    setKeyMsg(v.trim() ? 'Upstage CSRF saved to this browser only.' : 'Upstage CSRF cleared.');
+  };
+  const saveMtok = (v: string) => {
+    setMtok(v);
+    setMercuryToken(v);
+    setKeyMsg(v.trim() ? 'Mercury session token saved to this browser only.' : 'Mercury token cleared.');
+  };
+  const grabMercury = async () => {
+    setKeyMsg('Requesting a Mercury session directly from chat.inceptionlabs.ai\u2026');
+    const r = await fetchMercurySession();
+    if (r.token) {
+      setMtok(r.token);
+      setKeyMsg('Mercury session token captured.');
+    } else {
+      setKeyMsg(`Could not capture a Mercury session: ${r.error}`);
+    }
+  };
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -67,20 +110,15 @@ export default function App() {
   const efforts = model?.reasoningEfforts ?? (provider.reasoningEfforts && caps.reasoning ? provider.reasoningEfforts : []);
   const canThink = Boolean(caps.reasoning) || provider.supports.thinking;
 
-  // ── bridge health ──
+  // ── transport ──
+  // Direct mode has no health endpoint to poll: the provider IS the endpoint.
   useEffect(() => {
     let alive = true;
-    const check = async () => {
-      const h = await bridgeHealth();
-      if (!alive) return;
-      setBridgeUp(h.ok);
-      setBridgeErr(h.ok ? null : (h.error ?? 'unreachable'));
-    };
-    void check();
-    const t = setInterval(check, 8000);
+    void connectivity().then((c) => {
+      if (alive) setTransportVia(c.via);
+    });
     return () => {
       alive = false;
-      clearInterval(t);
     };
   }, []);
 
@@ -196,7 +234,13 @@ export default function App() {
     };
 
     try {
-      for await (const ev of streamChat(request, { signal: ctrl.signal })) {
+      for await (const ev of streamChat(request, {
+        signal: ctrl.signal,
+        onMeta: (info) => {
+          setLastHit({ url: info.url ?? '(unknown)', via: info.via, wire: info.wire });
+          setTransportVia(info.via);
+        },
+      })) {
         applyEvent(asstId, ev, startedAt, firstToken);
         if (ev.kind === 'done' || ev.kind === 'error') break;
       }
@@ -239,7 +283,7 @@ export default function App() {
       <Sidebar
         selection={selection}
         onSelect={setSelection}
-        bridgeUp={bridgeUp}
+        transportVia={transportVia}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
       />
@@ -262,37 +306,114 @@ export default function App() {
           {caps.search && <span className="chip search">⌕ search</span>}
           <span className="chip wire">{provider.wire}</span>
           <span className="chip" title="How the provider is reached">
-            {provider.transport === 'bridge' ? '⇄ local bridge' : '→ direct'}
+            {provider.transport === 'bridge' ? '⇄ via relay' : '→ direct'}
           </span>
+          <button
+            className={`icon-btn${provider.supports.credentials ? ' accent' : ''}`}
+            onClick={() => setKeysOpen((o) => !o)}
+            title="Provider credentials (Upstage CSRF, Mercury session token)"
+          >
+            {(provider.id === 'Upstage' && csrf.trim()) || (provider.id === 'Mercury' && mtok.trim()) ? '\u2713 keys' : '\u26bf keys'}
+          </button>
           <button className="icon-btn danger" onClick={clear} disabled={!messages.length}>
             Clear
           </button>
         </div>
+
+        {keysOpen && (
+          <div className="keys">
+            <div className="keys-head">
+              <b>Provider credentials</b>
+              <button className="icon-btn" onClick={() => setKeysOpen(false)} aria-label="Close">✕</button>
+            </div>
+            <p className="dim">
+              Stored in this browser's localStorage only. Never sent anywhere except the provider it
+              belongs to, and never through a relay. A browser cannot read another site's cookies, so
+              these have to be supplied by you.
+            </p>
+
+            <label className="field">
+              <span>Upstage CSRF token</span>
+              <input
+                type="password"
+                value={csrf}
+                onChange={(e) => saveCsrf(e.target.value)}
+                placeholder="paste from console.upstage.ai"
+                spellCheck={false}
+              />
+              <span className="dim">
+                Sign in at console.upstage.ai in this same browser first; the session cookie rides
+                along automatically. The CSRF token is sent as <code>x-csrf-token</code>.
+              </span>
+            </label>
+
+            <label className="field">
+              <span>Mercury session token</span>
+              <div className="row">
+                <input
+                  type="password"
+                  value={mtok}
+                  onChange={(e) => saveMtok(e.target.value)}
+                  placeholder="x-session-token"
+                  spellCheck={false}
+                />
+                <button className="btn" onClick={grabMercury}>Fetch session</button>
+              </div>
+              <span className="dim">
+                "Fetch session" POSTs directly to <code>chat.inceptionlabs.ai/api/session</code>. Sent
+                as <code>x-session-token</code>.
+              </span>
+            </label>
+
+            <div className="notice">
+              <b>Not inherited from the Python code:</b> Inception.py routes Mercury credential
+              capture through a hardcoded plaintext-HTTP proxy at{' '}
+              <code>{mercuryProxyNotice}</code>. Its provenance is unknown and it would see session
+              material in the clear, so it is <b>disabled</b> here — requests go straight to
+              Inception's real host.
+            </div>
+
+            {keyMsg && <div className="keymsg">{keyMsg}</div>}
+          </div>
+        )}
 
         {messages.length === 0 ? (
           <div className="empty">
             <h2>Pick a model, start chatting</h2>
             <p>
               {MODELS.length} models across {PROVIDERS.length - 1} providers, grouped in the sidebar.
-              Requests leave through a bridge running on <b>your</b> machine, so providers see
-              <b> your IP</b> — no hosted server between you and them.
+              Requests are built <b>in this browser</b> and sent straight to each provider's real
+              URL — no relay, no hosted server, no Python. Providers see <b>your IP</b>, and the URL
+              below is exactly what your DevTools network log will show.
             </p>
             <div className="suggest">
               {SUGGESTIONS.map((s) => (
                 <button key={s} onClick={() => useSuggestion(s)}>{s}</button>
               ))}
             </div>
-            {bridgeUp === false && (
+            <div className="notice">
+              <b>What direct mode does and does not control.</b> The body, the endpoint and every
+              settable header are built here and sent to the provider directly. But{' '}
+              <code>Origin</code>, <code>Referer</code>, <code>User-Agent</code>,{' '}
+              <code>Cookie</code> and anything starting with <code>Sec-</code> are{' '}
+              <b>forbidden header names</b> under the Fetch spec — no JavaScript can set them, so the
+              browser substitutes its own. It will report <code>Sec-Fetch-Site: cross-site</code>,
+              because a provider is a different site from this page.
+              <br />
+              <br />
+              Whether a provider answers anyway is <b>its CORS decision</b>, and it can only be
+              observed from a real browser with real network access. If one refuses, the error names
+              the exact host to check in DevTools. Use the <b>Offline Simulator</b> to exercise the
+              full pipeline — all five wire formats, thinking blocks, search lifecycle, usage — with
+              no network at all.
+            </div>
+            {lastHit && (
               <div className="notice">
-                <b>Bridge offline.</b> The SPA cannot reach providers on its own — a browser is not
-                allowed to set the <code>Origin</code>, <code>Referer</code> or <code>Sec-Fetch-*</code>{' '}
-                headers every one of these providers requires.
+                <b>Last request went to:</b>
                 <br />
+                <code>{lastHit.url}</code>
                 <br />
-                Start it with <code>npm run bridge</code>, then refresh. Until then, switch to the{' '}
-                <b>Offline Simulator</b> provider in the sidebar to exercise the full pipeline —
-                streaming, thinking blocks, search lifecycle and usage — with no network at all.
-                {bridgeErr ? <><br /><br /><code>{bridgeErr}</code></> : null}
+                <span className="dim">via {lastHit.via}{lastHit.wire ? ` · wire ${lastHit.wire}` : ''}</span>
               </div>
             )}
           </div>

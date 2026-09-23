@@ -22,7 +22,8 @@ export interface Selection {
 interface Props {
   selection: Selection;
   onSelect: (sel: Selection) => void;
-  bridgeUp: boolean | null;
+  /** 'direct' | 'bridge' | 'mock' — how the last request was routed. */
+  transportVia: string;
   open: boolean;
   onClose: () => void;
 }
@@ -40,7 +41,7 @@ function CapabilityDots({ m, provider }: { m: ModelRecord; provider: string }) {
   );
 }
 
-export default function Sidebar({ selection, onSelect, bridgeUp, open, onClose }: Props) {
+export default function Sidebar({ selection, onSelect, transportVia, open, onClose }: Props) {
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
@@ -172,9 +173,16 @@ export default function Sidebar({ selection, onSelect, bridgeUp, open, onClose }
       </div>
 
       <div className="side-foot">
-        <span className={`bridge-pill${bridgeUp === null ? '' : bridgeUp ? ' up' : ' down'}`}>
+        <span
+          className={`bridge-pill${transportVia === 'bridge' ? '' : ' up'}`}
+          title={
+            transportVia === 'bridge'
+              ? 'Relayed through the local Node bridge (opt-in fallback)'
+              : 'Browser hits each provider\u2019s real URL directly — no relay'
+          }
+        >
           <span className="led" />
-          {bridgeUp === null ? 'checking bridge…' : bridgeUp ? 'bridge online' : 'bridge offline'}
+          {transportVia === 'bridge' ? 'relayed' : transportVia === 'mock' ? 'simulated' : 'direct → provider'}
         </span>
         <span>
           DevsDo removed · Upstage v3 · {totals.models - 32} registry + 18 DeepInfra
