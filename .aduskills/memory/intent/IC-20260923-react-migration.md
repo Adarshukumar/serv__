@@ -157,3 +157,34 @@ node v22.22.3; npm (registry reachable, HTTP 200); git + gh authenticated.
 maps to something built or explicitly deferred. **MEDIUM** on A1 (what "the
 powering issue" means), because the bridge design is tuned to that reading. If
 A1 is wrong the architecture still holds, but tell me and I'll re-weight it.
+
+---
+
+## AMENDMENT (same day) — R-transport corrected by the user
+
+The original contract recorded the transport as a **local egress bridge**, on my
+recommendation, because I concluded a browser cannot call these providers. The
+user rejected that:
+
+> *"naa bro u did wrong.. thng i mean to say u is dirclty connec tthe ip... make
+> sure it work as not bridge/chat ... as the real url hits direclty in the
+> network logs.. no python involment do use npm... and rust..."*
+
+**Corrected requirement:** the browser calls each provider's real API URL
+directly. No `/bridge/chat` hop, no Python, npm only. The real provider URL must
+be what appears in the network log.
+
+Status: **implemented and committed (`8dd3937`)**, all seven providers
+`transport:'direct'`, relay retained only as an opt-in fallback and not started
+by default.
+
+**What this amendment does NOT change:** the Fetch-spec constraint is real and
+verified. `Origin`, `Referer`, `User-Agent`, `Cookie` and every `Sec-*` header
+remain unsettable from JavaScript. Direct mode sends everything settable and
+reports the remainder. Whether each provider accepts a cross-site request is its
+own CORS decision — **still UNKNOWN** and only observable from the user's browser.
+
+**Still unanswered:** what "and rust" means. No Rust toolchain exists in this
+sandbox and nothing in the delivered app requires one. Recorded as an open
+question rather than assumed; a Tauri shell would be additive and would
+incidentally bypass CORS entirely.

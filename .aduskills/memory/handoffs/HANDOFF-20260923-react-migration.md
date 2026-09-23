@@ -4,6 +4,52 @@
 calls from the user's own IP. Upstage v2→v3. DevsDo removed. Models grouped by
 provider. Design/architecture focus, **not** security. Work autonomously.
 
+---
+
+## REVISION 3 — READ THIS BEFORE ANYTHING ELSE
+
+**The transport is DIRECT, and the earlier bridge design was WRONG.** The user
+rejected it explicitly:
+
+> *"naa bro u did wrong.. thng i mean to say u is dirclty connec tthe ip... make
+> sure it work as not bridge/chat ... as the real url hits direclty in the
+> network logs.. no python involment do use npm"*
+
+The browser now builds each request (`payloads.ts`) and POSTs it straight to the
+provider's real endpoint (`direct.ts`). All seven providers carry
+`transport:'direct'`. The Node relay is retained only as an opt-in fallback and
+**is not started by default** — verified with the relay process stopped: nothing
+on `:8787`, `/bridge/health` 500s, while the SPA, all nine modules and the
+in-browser simulator still work.
+
+Anything below written before Revision 3 that describes the bridge as *the*
+design is **stale**. Trust `app/ARCHITECTURE.md` §0 and §3 instead.
+
+**The mistake, precisely:** I verified correctly that a browser cannot set
+`Origin`/`Referer`/`User-Agent`/`Cookie`/`Sec-*`. I then inferred that therefore
+a browser cannot call the API at all, and built infrastructure around an
+untested inference. Those five headers are the *only* thing a relay adds. The
+endpoint and body — what a provider actually parses — are fully settable
+client-side. Whether a provider rejects cross-site is an empirical per-provider
+CORS question that belongs in the user's browser, not in a redesign.
+`DECISION-20260923-local-egress-bridge` is marked **superseded**; see
+`DECISION-20260923-direct-transport` and the new first fact in
+`LEARNING-20260923-verify-dont-infer`.
+
+**Current state:** 82/82 tests (was 60), `tsc --noEmit` exit 0 strict, `vite
+build` 211.54 kB JS / 64.41 kB gzip. Committed `8dd3937`.
+
+**The one open question that matters now:** per-provider CORS enforcement is
+**UNKNOWN** — this sandbox kills TLS to all six hosts. Only the user's browser
+can settle it. A refusal yields an error naming the host; flip that provider to
+`transport:'bridge'` if it genuinely blocks.
+
+**Unresolved:** the user's message ended *"do use npm... as for all.... and
+rust..."*. No Rust toolchain exists here (`cargo`/`rustc` absent) and nothing
+requires one. If a Rust shell was meant — e.g. **Tauri**, whose HTTP plugin
+bypasses CORS entirely and would settle the open question above — that is a
+separate additive decision and should be confirmed, not assumed.
+
 **Date:** 2026-09-23 · **Branch:** `arena/01a0ccca-serv` · **Base:** `main` @ `e57f3a2`
 **Status:** **SUBSTANTIALLY COMPLETE** — built, tested, verified offline. Live
 provider verification is impossible in this sandbox and is **not claimed**.
@@ -17,9 +63,10 @@ objective"; the objective arrived).
 
 | File | Why |
 |---|---|
-| `app/ARCHITECTURE.md` | The design. §2 is the load-bearing finding; §6b lists two real bugs; §6 records a finding I **retracted** |
+| `app/ARCHITECTURE.md` | The design. **§0 REVISION 2 first**; §2 is the load-bearing evidence; §6b lists two real bugs; §6 records a finding I **retracted** |
 | `.aduskills/memory/intent/IC-20260923-react-migration.md` | Locked requirements R1–R16, assumptions A1–A5, acceptance tests |
-| `.aduskills/memory/nodes/DECISION-20260923-local-egress-bridge.json` | Why a bridge, and the four rejected alternatives |
+| `.aduskills/memory/nodes/DECISION-20260923-direct-transport.json` | **CURRENT** — why direct, what it can and cannot send |
+| `.aduskills/memory/nodes/DECISION-20260923-local-egress-bridge.json` | **SUPERSEDED** — kept for the reasoning that was wrong |
 | `.aduskills/memory/nodes/LEARNING-20260923-verify-dont-infer.json` | Three times I interpreted a tool result past what it proved |
 | `.aduskills/state/skills-route.md` | Rev 2 — security skills de-routed **by user instruction** |
 

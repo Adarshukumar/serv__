@@ -3,17 +3,17 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Single-page multi-provider LLM chat. React SPA + local Node egress bridge so provider calls leave from the user's own IP. No hosted server.",
+  "description": "React SPA that calls each LLM provider's real API directly from the browser. No hosted server, no relay, no Python.",
   "author": "Adarsh",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "bridge": "node bridge/server.mjs",
-    "start": "node bridge/server.mjs",
+    "start": "vite",
     "test": "node --import tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
     "gen:models": "python3 scripts/dump_registry.py",
-    "typecheck": "tsc --noEmit"
+    "bridge:fallback": "node bridge/server.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

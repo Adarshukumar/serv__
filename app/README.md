@@ -1,109 +1,198 @@
-# Aduskills Chat
+# serv — React SPA that calls each provider's real API directly
 
-One page. Six providers. **No hosted server** — provider calls leave from a
-bridge running on *your* machine, so providers see *your* IP.
+A single-page chat UI over **50 models from 6 providers**. The browser builds
+each request and POSTs it straight to the provider's own endpoint — the URL you
+see in DevTools → Network *is* the URL the code called.
 
-Replaces `My PREVIOUS ENTIRE SERVER/` (Python/FastAPI). That directory is left
-untouched.
+**No hosted server. No relay in the request path. No Python.**
 
-**Read [`ARCHITECTURE.md`](./ARCHITECTURE.md) first.** It records why a browser
-cannot call these providers directly, the four wire formats, and every finding
-from reading the Python source — including one I got wrong and retracted.
+Replaces `My PREVIOUS ENTIRE SERVER/` (Python/FastAPI), which is left completely
+unmodified. Design rationale, per-provider wire facts and every verification
+result are in **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 ---
 
-## Quick start
+## Run it
 
 ```bash
-cd app
-npm install
-
-# terminal 1 — the local egress bridge (Node ≥20, zero dependencies)
-npm run bridge
-
-# terminal 2 — the SPA
-npm run dev
+npm ci        # 74 packages, reproducible from the committed lockfile
+npm run dev   # Vite on 0.0.0.0:5173
 ```
 
-Open the printed Vite URL. If the bridge is down the UI says so and offers the
-**Offline Simulator**, which streams realistic SSE in every wire format with no
-network and no credentials.
+That is the whole thing. There is no second process to start.
 
-## Scripts
+> If `npm run dev` fails with `Cannot find package 'vite' imported from
+> vite.config.ts`, `node_modules` is missing — `npx` silently fetched a fresh
+> `vite@8.x` instead of the local 5.4. Run `npm ci` first.
 
-| Command | What it does |
+---
+
+## What direct mode does and does not control
+
+The request **body**, the **endpoint**, and every **settable header** are built
+here and sent to the provider. `src/lib/payloads.ts` is a line-referenced port of
+each Python provider, so the body is byte-equivalent to what your server sent.
+
+Five things no browser-side code can send, under any architecture — the Fetch
+spec makes them **forbidden header names**, and JavaScript's attempt to set them
+is ignored:
+
+| Header | What the browser sends instead |
 |---|---|
-| `npm run dev` | Vite dev server; proxies `/bridge` → `127.0.0.1:8787` |
-| `npm run bridge` | Local egress bridge |
-| `npm test` | 60 tests: unit + differential + integration |
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm run build` | Type-check + production bundle |
-| `npm run gen:models` | Regenerate `src/data/models.ts` from the Python registry |
+| `Origin` | this page's origin |
+| `Referer` | this page's URL |
+| `User-Agent` | the real browser's UA |
+| `Cookie` | only same-site cookies |
+| anything `Sec-*` / `Proxy-*` | `Sec-Fetch-Site: cross-site`, since a provider is a different site |
 
-## What changed from the Python server
+`src/lib/headers.ts` partitions each provider's header set against that rule and
+**reports the remainder instead of pretending**. Three providers (mCloudFlare,
+Dolphin, Mercury) had Python code asserting `Sec-Fetch-Site: same-origin`; they
+will receive `cross-site`.
 
-| | Python (`My PREVIOUS ENTIRE SERVER/`) | This |
-|---|---|---|
-| Runtime | FastAPI + uvicorn, 10 deps | Vite + React 18 + TS; bridge has **zero** deps |
-| Deploy | HF Spaces Docker image, port 7860 | Static SPA + a local process |
-| Outbound IP | One shared datacenter IP | **Each user's own IP** |
-| Heavy deps | Chromium, xvfb, `chromium-driver`, DrissionPage, cloudscraper, curl-cffi | none |
-| Providers | 7 (incl. DevsDo) | 6 — **DevsDo removed** |
-| Upstage | v2: DrissionPage + threads + `requests` | **v3**: pure async, ported to JS |
-| Models | 64 in registry, DeepInfra unreachable | 50, DeepInfra's 18 recovered |
-| Provider quirks | Re-handled in `Completion.py` *and* `Server.py` | One normaliser per wire format, UI is format-agnostic |
+**So whether a provider answers is its CORS decision** — an empirical question
+per provider, not something this code can settle. A refusal produces an error
+naming the exact host to look for in DevTools; it never hangs silently.
+
+### If one provider does block you
+
+Each provider carries `transport: 'direct' | 'bridge'`. All seven are `direct`.
+Flip the one that blocks and it routes through the retained Node relay
+(`npm run bridge:fallback`, binds `127.0.0.1:8787`, still on *your* machine so
+still *your* IP). Same UI, same event model — only the fetch differs.
+
+---
 
 ## Credentials
 
-Upstage and Mercury authenticate with **captured browser session material**
-(cookies + CSRF / `x-session-token`), not API keys. Credential *capture* is not
-ported yet. Until it is, pass them to the bridge as environment variables:
+A browser will not let JavaScript read another site's cookies, so direct mode
+cannot capture a logged-in session for you. Click **⚿ keys** in the top bar:
 
-```bash
-UPSTAGE_COOKIE='...' UPSTAGE_CSRF='...' npm run bridge
-MERCURY_TOKEN='...'  MERCURY_UA='...'   npm run bridge
-```
+- **Upstage** — paste the CSRF token from `console.upstage.ai` (sign in there in
+  the same browser first; the session cookie then rides along automatically).
+- **Mercury** — paste a session token, or press **Fetch session**, which POSTs
+  straight to `chat.inceptionlabs.ai/api/session`.
 
-Without them the bridge returns a `missing_credentials` error event rather than
-hanging or silently emitting nothing. `GET /bridge/health` reports which
-providers are currently credential-ready.
+Both are stored in `localStorage` on this origin only and sent solely to their
+own provider.
 
-Keep them out of Git — the repo `.gitignore` covers `.env*` and the cache dirs.
+> `Inception.py` routes Mercury credential capture through a hardcoded
+> **plaintext-HTTP** proxy at `217.217.249.160:8080` of unknown provenance, which
+> would see session material in the clear. **That proxy is not used here.**
+
+---
+
+## Scripts
+
+| Script | What it does |
+|---|---|
+| `npm run dev` | Vite dev server |
+| `npm start` | same as `dev` |
+| `npm test` | 82 tests via `node:test` |
+| `npm run typecheck` | `tsc --noEmit` (strict) |
+| `npm run build` | type-check + production bundle |
+| `npm run gen:models` | regenerate `src/data/models.ts` by executing the Python registry |
+| `npm run bridge:fallback` | the opt-in relay — **not needed by default** |
+
+---
+
+## Providers and wire formats
+
+Five distinct response shapes, normalised to one `StreamEvent` union. The UI
+never branches on provider.
+
+| Provider | Endpoint | Wire format |
+|---|---|---|
+| DeepInfra | `api.deepinfra.com/v1/openai/chat/completions` | `openai-delta` |
+| Dolphin | `chat.dphn.ai/api/chat` | `openai-delta` (ends on `finish_reason`) |
+| mCloudFlare | `multi-modal.ai.cloudflare.com/api/inference` | `workers-raw` — bare `{"response":…}`, no `choices` |
+| LLMChat | `llmchat.in/inference/stream?model={tag}/{name}` | `reasoning-delta` |
+| Mercury | `chat.inceptionlabs.ai/api/chat` | `typed-events` |
+| Upstage | `ap-northeast-2.apistage.ai/…?include_think=true` | `upstage-v3` — all of the above plus inline `<think>` tags split across chunks, search lifecycle, usage |
+
+**DevsDo is removed** (32 exclusive models dropped). **Upstage is v3** — pure
+async; DrissionPage, Chromium, xvfb and the thread bridges are all gone.
+
+`src/data/models.ts` is **generated by executing `Models.py`**, never hand-typed:
+64 → 32 after DevsDo, **+18 recovered DeepInfra** = 50 models. DeepInfra was
+registered in `Client.py` but absent from `ModelRegistry`, making it unreachable
+via `/v1/models` — see ARCHITECTURE.md §6 finding I-1.
+
+---
+
+## Offline Simulator
+
+The last sidebar entry streams canned SSE in **all five wire formats** — generated
+in-browser, with **zero network access** and no relay. A test asserts `fetch` is
+never called while it runs. Use it to exercise streaming, thinking blocks, the
+search lifecycle, source chips and usage accounting when no provider is reachable.
+
+---
 
 ## Layout
 
 ```
-bridge/          local egress bridge — the only thing that talks to providers
-  server.mjs     http + SSE relay, binds 127.0.0.1
-  headers.mjs    forbidden-header sets lifted verbatim from the Python source
-  payloads.mjs   per-provider request bodies, ported line by line
-  mock.mjs       offline simulator emitting all four wire formats
 src/
-  data/          models.ts (GENERATED) + providers.ts (metadata)
-  lib/           sse.ts, envelope.ts, normalizers.ts, thinkSplitter.ts, bridge.ts, markdown.tsx
-  components/    Sidebar (models by provider), Message, Composer
-scripts/
-  dump_registry.py                 executes Models.py → src/data/models.ts
-  gen_thinksplitter_fixtures.py    executes Python ThinkSplitter → 815 differential cases
-tests/
-  normalizers.test.ts              50 unit tests over the wire formats
-  thinksplitter-differential.test.ts   TS port vs the Python original
-  integration.test.ts              spawns the real bridge, drives the real pipeline
+  lib/
+    stream.ts       the one entry point — routes mock / direct / bridge
+    direct.ts     ★ resolveRequest() + streamDirect(): the real URL
+    payloads.ts   ★ per-provider request bodies
+    headers.ts    ★ forbidden-vs-settable header partition
+    mock.ts       ★ in-browser offline simulator
+    normalizers.ts  wire formats A–E → StreamEvent
+    thinkSplitter.ts  verbatim port of v3's ThinkSplitter
+    sse.ts          SSE line framing
+    envelope.ts, bridge.ts, markdown.tsx
+  data/
+    models.ts       GENERATED — do not hand-edit
+    providers.ts    provider metadata, transport, capabilities
+  components/       Sidebar, Message, Composer
+  App.tsx           thread, topbar, Keys panel
+bridge/             opt-in fallback relay (not started by default)
+tests/              82 tests
+scripts/            registry dump + differential fixture generator (Python)
 ```
 
-## Known limits
+★ = added when the transport became direct.
 
-- **No live provider call has been verified.** The sandbox I built this in
-  cannot reach any provider host (TLS handshake killed; `curl` exit 35). The
-  offline simulator and the differential tests are the substitute, and they are
-  clearly labelled as such.
-- **CORS/`Sec-Fetch` enforcement per provider is unknown.** Flip a provider's
-  `transport` to `'direct'` in `src/data/providers.ts` only after confirming
-  from a real browser that it works.
-- Dolphin attachments (images/text) are modelled in the capability system; the
-  upload UI is not wired.
-- Security review was deliberately deferred. Two things are flagged in
-  `ARCHITECTURE.md` §10 and still need a look: the bridge replays captured
-  session cookies, and `Inception.py` hardcodes a plaintext-HTTP proxy
-  (`217.217.249.160:8080`) whose provenance is unknown. It is **disabled by
-  default** here — `bridge/headers.mjs` reads `MERCURY_PROXY` only if you set it.
+---
+
+## Verification
+
+```
+npm test            82/82 pass, 0 fail
+tsc --noEmit        exit 0 (strict)
+vite build          211.54 kB JS / 64.41 kB gzip
+```
+
+- **72 unit tests** — five wire formats, SSE framer, `ThinkSplitter`, per-provider
+  request formation, and connection establishment with `fetch` stubbed (SSE split
+  across chunk boundaries, CORS `TypeError`, HTTP 403, abort flushing held-back text).
+- **3 differential tests** — **815 cases** generated by executing the *original
+  Python* `ThinkSplitter`, so the port is proven equivalent to yours, not to a guess.
+- **10 integration tests** — spawn the fallback relay and drive it through the real
+  browser-side modules.
+
+Direct mode was verified **with the relay process stopped**: nothing on `:8787`,
+`/bridge/health` returning 500, while the SPA and all nine modules still served
+and the simulator still streamed.
+
+### Not verified, and not claimed
+
+**No live call to any real provider has been made.** This sandbox kills TLS to
+all six provider hosts (`curl` exit 35) while github/pypi succeed, so
+**per-provider CORS enforcement is UNKNOWN**. That is the first thing to check
+from a real browser. There is also no real-DOM E2E — no browser and no docker
+here; the stubbed-`fetch` tests are a substitute, not equivalent coverage.
+
+---
+
+## Security
+
+Review deferred by explicit instruction — this project is design/architecture
+scoped. Recorded rather than actioned, in `ARCHITECTURE.md` §10: tokens live in
+`localStorage` (readable by any script on this origin, so no third-party script
+may be added without review); the fallback relay spoofs `Origin`/`Referer` and
+replays captured cookies; the Inception plaintext proxy is disabled. A root
+`.gitignore` covers `.env*`, keys and credential cache directories — the repo had
+none.

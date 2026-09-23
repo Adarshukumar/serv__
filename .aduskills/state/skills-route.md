@@ -1,5 +1,28 @@
 # Skill Route — minimum relevant set
 
+**Revision 3** (supersedes rev 2's transport conclusion; the security
+de-routing stands). Re-routed after the user **rejected the bridge architecture**
+and required direct browser→provider calls.
+
+Newly load-bearing:
+
+| Skill | Why | Status |
+|---|---|---|
+| `doubt-driven-development` | Should have been applied to my OWN architectural conclusion, not only to provider facts. It caught a false finding (I-4) but not the far costlier false *inference* that a relay was necessary | **USED — and it under-performed, see below** |
+| `source-driven-development` | Still correct: the forbidden-header evidence genuinely comes from MDN + W3C. The failure was not bad sourcing but over-reading what the source proved | USED |
+| `evidence-gate` | Direct mode is gated on 22 new tests covering request formation and stubbed connections | USED — 82/82 |
+| `intent-lock` | The user's correction had to be folded into the contract without re-litigating it | USED — IC amended |
+
+**The routing lesson:** `doubt-driven-development` was routed and did fire — on
+*data* (it caught the retracted Upstage finding). It never fired on the
+*architecture*, because I treated a verified constraint as a verified conclusion.
+When a constraint appears to block an explicit user request, the route must
+include a step that challenges the inference itself: implement the request as
+asked and let the constraint surface as an observable failure, rather than
+redesigning around an untested belief.
+
+---
+
 **Revision 2** (supersedes the activation-time route). Re-routed after the user
 locked a concrete objective and added an explicit constraint:
 
@@ -18,10 +41,10 @@ into context.* 38 skills installed; **7 routed**. Resolve from
 | Skill | Why routed | Status |
 |---|---|---|
 | `intent-lock` | Normalise a heavily typo'd, multi-part objective into a locked contract | USED — IC rewritten as `IC-20260923-react-migration` |
-| `contract-first-clean-arch` | The whole task is a service/API boundary redesign: 7 providers behind one interface | USED — drove the `StreamEvent` abstraction and the bridge/SPA split |
+| `contract-first-clean-arch` | The whole task is a service/API boundary redesign: 7 providers behind one interface | USED — drove the `StreamEvent` abstraction; the transport split was revised in rev 3 |
 | `source-driven-development` | Every architectural claim had to come from the Python source or an authoritative spec, not memory | USED — all endpoints, headers, payloads, wire formats read from source; forbidden-header rule sourced from MDN + W3C |
 | `doubt-driven-development` | Needed to challenge my own conclusions | USED — **caught a false finding (I-4)** I had already written up as confirmed |
-| `evidence-gate` | Nothing here could be claimed "working" without fresh tool output | USED — 60 tests, typecheck, build, live curl probes |
+| `evidence-gate` | Nothing here could be claimed "working" without fresh tool output | USED — 82 tests, typecheck, build, live probes |
 | `memory-graph` | Preserve the provider analysis and the retraction across sessions | USED |
 | `wrap-up` | Persist handoff at close | pending |
 

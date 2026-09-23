@@ -1,82 +1,144 @@
 {
   "id": "DECISION-20260923-local-egress-bridge",
   "type": "DECISION",
-  "title": "Local Node egress bridge instead of direct browser-to-provider calls",
-  "summary": "The user asked for no server and direct API calls from the browser. Direct calls are impossible for these specific providers because every one of them is sent forbidden request headers that JavaScript cannot set. A zero-dependency Node bridge running on the user's own machine was chosen instead: it delivers the actual goal (the user's own IP, no hosted backend) while remaining technically possible.",
+  "title": "SUPERSEDED - local egress bridge as the default transport",
+  "summary": "SUPERSEDED by user instruction 2026-09-23, same day. Revision 1 concluded a browser cannot call these providers and made a local Node relay the default transport. The user rejected that outright: hit the real provider API directly, no /bridge/chat, no Python, and the real URL must appear in the network log. The technical evidence in this node remains CORRECT - Origin, Referer, User-Agent, Cookie and every Sec-* header are forbidden header names no JavaScript can set. What was wrong was the inference that this necessitates a relay. Those five headers are the ONLY thing a relay adds; the endpoint, body, wire format and credentials are all fully constructible client-side. Superseded by DECISION-20260923-direct-transport.",
   "facts": [
+    {
+      "claim": "The error was not factual but inferential: from 'a browser cannot set five headers' I concluded 'therefore a browser cannot call this API'. Those are different claims. The headers a provider actually parses are the body and the endpoint, both settable. Whether a provider rejects cross-site is an empirical per-provider CORS question that should be TESTED, not pre-emptively routed around by inserting infrastructure the user did not ask for. Building the relay also cost the user a second process to run.",
+      "classification": "ANALYSED",
+      "evidence": [
+        "user message 2026-09-23 rejecting the bridge",
+        "app/ARCHITECTURE.md \u00a70 REVISION 2",
+        "app/src/lib/direct.ts resolveRequest()",
+        "app/tests/direct.test.ts request-formation tests"
+      ],
+      "confidence": "high"
+    },
     {
       "claim": "DECISION: static React SPA plus a local Node bridge on 127.0.0.1:8787. The SPA talks only to same-origin /bridge paths (proxied by Vite in dev). The bridge sets Origin/Referer/Sec-Fetch-*, holds cookies and CSRF tokens, dials the provider, and relays the raw SSE back verbatim. Normalisation happens in the browser, so there is exactly ONE parser implementation.",
       "classification": "OBSERVED",
-      "evidence": ["app/bridge/server.mjs", "app/vite.config.ts proxy config", "app/src/lib/bridge.ts"],
+      "evidence": [
+        "app/bridge/server.mjs",
+        "app/vite.config.ts proxy config",
+        "app/src/lib/bridge.ts"
+      ],
       "confidence": "high"
     },
     {
       "claim": "BLOCKING EVIDENCE: all Sec- prefixed headers are forbidden request headers and cannot be modified from JavaScript (MDN Glossary 'Fetch metadata request header'; W3C Fetch Metadata spec section 4.2). Origin and Referer are likewise not script-settable. mCloudFlare, Dolphin and Mercury all send Sec-Fetch-Site: same-origin; a browser will always send cross-site. All six providers send Origin and Referer.",
       "classification": "SOURCE_SUPPORTED",
-      "evidence": ["https://developer.mozilla.org/en-US/docs/Glossary/Fetch_metadata_request_header", "https://www.w3.org/TR/fetch-metadata/ section 4.2", "bridge/headers.mjs lifted from DeepInfra.py 36-55, mCloudFlare.py 39-60, Dolphin.py 70-85, LLmChat.py 91-104, Inception.py 624-643"],
+      "evidence": [
+        "https://developer.mozilla.org/en-US/docs/Glossary/Fetch_metadata_request_header",
+        "https://www.w3.org/TR/fetch-metadata/ section 4.2",
+        "bridge/headers.mjs lifted from DeepInfra.py 36-55, mCloudFlare.py 39-60, Dolphin.py 70-85, LLmChat.py 91-104, Inception.py 624-643"
+      ],
       "confidence": "high"
     },
     {
       "claim": "CORROBORATION: 'If you are calling one of these endpoints from frontend JavaScript - a client-side integration - your requests get rejected. The server sees Sec-Fetch-Site: cross-site and Sec-Fetch-Mode: cors, and blocks you. From the browser, you can't change these headers. A server-side proxy can.' And: 'Server-side code (Node.js, Python, Go, etc.) also has no forbidden header restrictions.'",
       "classification": "SOURCE_SUPPORTED",
-      "evidence": ["https://corsfix.com/blog/change-sec-fetch-headers (2026-03-09)"],
+      "evidence": [
+        "https://corsfix.com/blog/change-sec-fetch-headers (2026-03-09)"
+      ],
       "confidence": "medium"
     },
     {
       "claim": "HONEST LIMIT: whether each provider actually ENFORCES those headers is UNKNOWN and could not be tested. All six provider hosts fail the TLS handshake in this sandbox (curl exit 35, SSL_ERROR_SYSCALL) while github.com and pypi.org respond normally, proving a targeted egress allowlist rather than general network failure. Some providers might ignore Sec-Fetch-* and accept cross-origin browser calls.",
       "classification": "TOOL_VERIFIED",
-      "evidence": ["cors_probe2.sh: six providers curl_exit=35 http=000; two controls curl_exit=0 http=404/200"],
+      "evidence": [
+        "cors_probe2.sh: six providers curl_exit=35 http=000; two controls curl_exit=0 http=404/200"
+      ],
       "confidence": "high"
     },
     {
       "claim": "ESCAPE HATCH BUILT IN: every provider declares transport: 'bridge' | 'direct' in src/data/providers.ts. If the user confirms from a real browser that a provider returns Access-Control-Allow-Origin and ignores Sec-Fetch-*, that one provider can bypass the bridge with a single-field change. The UI, event model and normalisers are identical either way. The design does not require accepting the CORS conclusion; it allows testing it per provider.",
       "classification": "OBSERVED",
-      "evidence": ["src/types.ts Transport type", "src/data/providers.ts transport fields", "ARCHITECTURE.md section 3.3"],
+      "evidence": [
+        "src/types.ts Transport type",
+        "src/data/providers.ts transport fields",
+        "ARCHITECTURE.md section 3.3"
+      ],
       "confidence": "high"
     },
     {
       "claim": "REJECTED alternative 1 - pure static SPA calling providers directly: impossible for the reason above. Would have shipped something that cannot work.",
       "classification": "SOURCE_SUPPORTED",
-      "evidence": ["the forbidden-header sources above"],
+      "evidence": [
+        "the forbidden-header sources above"
+      ],
       "confidence": "high"
     },
     {
       "claim": "REJECTED alternative 2 - a hosted proxy (HF Spaces, Vercel, Cloudflare Workers): reintroduces exactly what the user is trying to escape - one shared datacenter IP that gets blocked or rate-limited, plus hosting cost, uptime and sleeping. This is the 'powering issue' being removed.",
       "classification": "INFERRED",
-      "evidence": ["user: 'not in the server formate in out of issue we do get the powering.. issuee'", "the existing Dockerfile targets HF Spaces port 7860"],
+      "evidence": [
+        "user: 'not in the server formate in out of issue we do get the powering.. issuee'",
+        "the existing Dockerfile targets HF Spaces port 7860"
+      ],
       "confidence": "medium"
     },
     {
       "claim": "REJECTED alternative 3 - a public CORS proxy service: routes user session cookies and CSRF tokens through an unaudited third party. Unacceptable for credential-bearing providers even before the deferred security review.",
       "classification": "INFERRED",
-      "evidence": ["Upstage and Mercury both replay captured session material"],
+      "evidence": [
+        "Upstage and Mercury both replay captured session material"
+      ],
       "confidence": "high"
     },
     {
       "claim": "REJECTED alternative 4 - normalise inside the bridge: would duplicate the parser in two languages (JS in the bridge, TS in the SPA) or force a build step on the bridge. Relaying raw SSE keeps the bridge dumb and the tested TS normalisers authoritative.",
       "classification": "INFERRED",
-      "evidence": ["bridge/server.mjs pipes res.body verbatim into 'raw' envelope frames", "60 tests exercise the TS normalisers"],
+      "evidence": [
+        "bridge/server.mjs pipes res.body verbatim into 'raw' envelope frames",
+        "60 tests exercise the TS normalisers"
+      ],
       "confidence": "high"
     },
     {
       "claim": "TRADE-OFF ACCEPTED: the user must run a local process. Mitigated by zero dependencies (Node >=20 built-in http and fetch only), one command (npm run bridge), and an Offline Simulator provider so the UI is fully usable and demonstrable before the bridge or credentials exist.",
       "classification": "OBSERVED",
-      "evidence": ["bridge/server.mjs imports only node:http plus local modules", "src/data/providers.ts MOCK_MODELS"],
+      "evidence": [
+        "bridge/server.mjs imports only node:http plus local modules",
+        "src/data/providers.ts MOCK_MODELS"
+      ],
       "confidence": "high"
     }
   ],
   "edges": [
-    {"type": "DECIDED_BY", "target": "agent, disclosed to user as a deliberate divergence from R4/R9"},
-    {"type": "IMPLEMENTS", "target": "ARTIFACT-20260923-app-react-migration"},
-    {"type": "CONSTRAINS", "target": "PROJECT-20260923-serv-llm-gateway"},
-    {"type": "DERIVED_FROM", "target": "EVIDENCE-20260923-environment-inventory"},
-    {"type": "MITIGATES", "target": "RISK-20260923-runtime-unverified"},
-    {"type": "RELATED_TO", "target": "LEARNING-20260923-verify-dont-infer"}
+    {
+      "type": "DECIDED_BY",
+      "target": "agent, disclosed to user as a deliberate divergence from R4/R9"
+    },
+    {
+      "type": "IMPLEMENTS",
+      "target": "ARTIFACT-20260923-app-react-migration"
+    },
+    {
+      "type": "CONSTRAINS",
+      "target": "PROJECT-20260923-serv-llm-gateway"
+    },
+    {
+      "type": "DERIVED_FROM",
+      "target": "EVIDENCE-20260923-environment-inventory"
+    },
+    {
+      "type": "MITIGATES",
+      "target": "RISK-20260923-runtime-unverified"
+    },
+    {
+      "type": "RELATED_TO",
+      "target": "LEARNING-20260923-verify-dont-infer"
+    },
+    {
+      "type": "SUPERSEDED_BY",
+      "target": "DECISION-20260923-direct-transport"
+    }
   ],
   "source": "react migration design, 2026-09-23",
   "sensitivity": "internal",
   "retention": "project",
-  "status": "active",
+  "status": "superseded",
   "created_at": "2026-09-23",
   "updated_at": "2026-09-23",
   "last_verified_at": "2026-09-23"

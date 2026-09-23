@@ -1,0 +1,138 @@
+{
+  "id": "DECISION-20260923-direct-transport",
+  "type": "DECISION",
+  "title": "Direct browser-to-provider transport is the default",
+  "summary": "Per explicit user instruction, the SPA builds each request client-side and POSTs it straight to the provider's real endpoint, so the URL in DevTools network log is the URL the code called. No relay in the request path, no Python, npm only. All seven providers carry transport:'direct'. The Node relay is retained solely as an opt-in per-provider fallback and is not started by default. Verified with the relay process stopped: nothing on :8787, /bridge/health 500, while the SPA, all nine modules and the in-browser simulator still work.",
+  "facts": [
+    {
+      "claim": "resolveRequest() is a pure function returning {url, method, headers, body, wire, provider} with no DOM and no network dependency, which is what makes request formation unit-testable without a browser.",
+      "classification": "OBSERVED",
+      "evidence": [
+        "app/src/lib/direct.ts"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "All six real providers resolve to their own https endpoint with no bridge/localhost/127.0.0.1/:8787 substring anywhere in the URL. Asserted by test, not by inspection.",
+      "classification": "VERIFIED",
+      "evidence": [
+        "app/tests/direct.test.ts"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "headers.ts partitions each provider's header set against the Fetch spec forbidden names, using the exact list PLUS the Sec-/Proxy- prefix rule (which covers Sec-Fetch-* and sec-ch-ua*). Direct mode sends everything settable and surfaces the remainder. A test asserts no settable set contains a forbidden name and that the split is lossless.",
+      "classification": "VERIFIED",
+      "evidence": [
+        "app/src/lib/headers.ts",
+        "app/tests/direct.test.ts"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "mCloudFlare, Dolphin and Mercury had Python code asserting Sec-Fetch-Site: same-origin. In direct mode the browser sends cross-site, because a provider is a different site from the page. This cannot be avoided by any client-side code and is the most likely cause of a refusal.",
+      "classification": "ANALYSED",
+      "evidence": [
+        "app/src/lib/headers.ts FULL_HEADERS",
+        "MDN Fetch metadata request header"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "Whether each provider answers a cross-site browser request is STILL UNKNOWN. This sandbox kills TLS to all six hosts (curl exit 35) while github/pypi succeed. Per-provider CORS enforcement can only be observed from the user's own browser and is the first thing to check.",
+      "classification": "INFERRED",
+      "evidence": [
+        "curl probes to all six hosts",
+        "app/ARCHITECTURE.md \u00a710"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "localStorage is a ReferenceError under Node, not undefined. Unguarded access made resolveRequest untestable and would crash any non-DOM host. Guarded with an in-memory fallback so request shape never depends on a DOM existing.",
+      "classification": "VERIFIED",
+      "evidence": [
+        "node -e localStorage probe",
+        "app/src/lib/direct.ts store()"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "A browser cannot read another site's cookies, so direct mode cannot auto-capture an Upstage or Mercury session. A Keys panel stores a pasted CSRF/session token in localStorage only, sent solely to its own provider; Fetch session POSTs straight to chat.inceptionlabs.ai/api/session. v3's RSC-parsing capture flow is therefore not ported.",
+      "classification": "ANALYSED",
+      "evidence": [
+        "app/src/App.tsx Keys panel",
+        "app/src/lib/direct.ts fetchMercurySession"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "Inception.py's hardcoded plaintext-HTTP proxy 217.217.249.160:8080 is NOT used in direct mode. Requests go to Inception's real host over TLS. Flagged in the UI so the divergence is visible.",
+      "classification": "VERIFIED",
+      "evidence": [
+        "app/src/lib/headers.ts MERCURY_HARDCODED_PROXY",
+        "app/src/App.tsx Keys panel notice"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "Two of the 22 new tests failed on first run and BOTH were the test's fault, recorded rather than papered over: one asserted LLMChat's URL equalled the bare endpoint when it legitimately appends ?model={tag}/{name}; one asserted a partial think tag must NOT reach content, when flushing it at end-of-stream is exactly the holdback bug fixed earlier - discarding it was the defect, so the assertion was inverted not weakened.",
+      "classification": "VERIFIED",
+      "evidence": [
+        "test run output",
+        "app/ARCHITECTURE.md \u00a78"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "A stubbed fetch that merely CLOSES a ReadableStream on abort does not reproduce real fetch, which REJECTS with AbortError. The first version of the abort test passed through the normal-completion path and never exercised the abort branch. Fixed by erroring the stream with DOMException('...','AbortError').",
+      "classification": "VERIFIED",
+      "evidence": [
+        "app/tests/direct.test.ts abort test"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "\\uXXXX escapes are valid inside JS string literals but render LITERALLY in JSX text. Two occurrences in App.tsx would have shown raw backslash-u to the user; tsc did not catch it because both are syntactically valid text. A scan script now distinguishes the two contexts.",
+      "classification": "VERIFIED",
+      "evidence": [
+        "escape-context scan over src/*.tsx"
+      ],
+      "confidence": "high"
+    },
+    {
+      "claim": "Test count went 60 to 82, all passing. tsc --noEmit exit 0 strict. vite build 211.54 kB JS / 64.41 kB gzip, 47 modules.",
+      "classification": "VERIFIED",
+      "evidence": [
+        "npm test",
+        "npx tsc --noEmit",
+        "npx vite build"
+      ],
+      "confidence": "high"
+    }
+  ],
+  "created_at": "2026-09-23",
+  "updated_at": "2026-09-23",
+  "last_verified_at": "2026-09-23",
+  "source": "user instruction 2026-09-23 + implementation in app/",
+  "sensitivity": "internal",
+  "retention": "permanent",
+  "status": "active",
+  "edges": [
+    {
+      "type": "SUPERSEDES",
+      "target": "DECISION-20260923-local-egress-bridge"
+    },
+    {
+      "type": "IMPLEMENTS",
+      "target": "IC-20260923-react-migration"
+    },
+    {
+      "type": "RELATED_TO",
+      "target": "ARTIFACT-20260923-app-react-migration"
+    },
+    {
+      "type": "SUPPORTS",
+      "target": "LEARNING-20260923-verify-dont-infer"
+    }
+  ]
+}

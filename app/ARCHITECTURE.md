@@ -1,6 +1,33 @@
-# Architecture — Python server → React + local bridge
+# Architecture — Python server → React SPA calling providers directly
 
-**Status:** design locked, implementation in progress
+**Status:** design locked, implemented, 82/82 tests green
+
+## 0. REVISION 2 — the transport is DIRECT (this supersedes Revision 1)
+
+Revision 1 of this document concluded that a browser cannot call these providers
+and designed a local Node relay instead. **The user rejected that.** The
+instruction was explicit: hit the real provider API directly, no `/bridge/chat`,
+no Python, npm only, and the real URL must be what appears in the network log.
+
+Direct is now the default for all seven providers and the relay is not started.
+
+**What the reversal changed, and what it did not.** The evidence in §2 is still
+correct — `Origin`, `Referer`, `User-Agent`, `Cookie` and every `Sec-*` header
+are forbidden header names that no JavaScript can set, in any architecture. What
+Revision 1 got wrong was treating that as a reason to *insert a relay*. It is
+not. Those five headers are the only thing a relay adds; everything the provider
+actually parses — the endpoint, the JSON body, the wire format, the credentials —
+is fully constructible in the browser, and `payloads.ts` constructs it.
+
+So the honest framing is: **direct mode sends everything that can be sent.** The
+five forbidden headers are filled in by the browser itself, which means the
+provider sees `Sec-Fetch-Site: cross-site` and this page's origin. Whether it
+answers anyway is that provider's CORS decision — and that is an empirical
+question about each provider, not a reason to pre-emptively route around it.
+
+The relay survives only as an opt-in per-provider fallback (§3.3), for any
+provider the user confirms actually blocks cross-site reads.
+
 **Supersedes:** `My PREVIOUS ENTIRE SERVER/` (Python/FastAPI) — kept intact, not modified
 **Scope of this doc:** design and architecture. Security review deliberately deferred at the user's instruction.
 
@@ -16,10 +43,15 @@
 | Remove DevsDo | ✅ Done | Provider deleted; 32 DevsDo-exclusive models removed |
 | Models listed per provider | ✅ Done | Registry already keyed provider-first; preserved |
 | Per-provider thinking / response-shape handling | ✅ Done | 4 distinct wire formats normalised to one event model |
-| **"No server" — browser calls the provider APIs directly** | ⚠️ **Not achievable as stated** | See §2. This is the one place the design diverges from the request, and it is forced by the web platform, not by preference. |
-| Use the **user's IP** for provider calls | ✅ **Achieved** | Delivered by the local bridge (§3), which is the actual goal behind "no server" |
+| **"No server" — browser calls the provider APIs directly** | ✅ **Done** | `direct.ts` POSTs to each provider's real URL. No relay hop, verified with the bridge process stopped. Five forbidden headers are browser-filled — see §0 and §2. |
+| Use the **user's IP** for provider calls | ✅ **Achieved** | The browser IS the client, so requests carry the user's own IP by construction |
+| Real URL visible in the network log | ✅ **Done** | DevTools shows the provider host. The UI echoes the last URL hit, and tests assert `resolveRequest()` returns the true endpoint per provider |
 
-## 2. Why the browser cannot call these providers directly
+## 2. What the browser still cannot control (evidence, unchanged)
+
+> This section's *facts* are correct and verified. Its Revision-1 *conclusion* —
+> that they necessitate a relay — was wrong and is superseded by §0. Kept intact
+> because the constraint is real and any future reader needs it.
 
 This is the load-bearing finding. It is **SOURCE_SUPPORTED**, not opinion.
 
@@ -67,57 +99,83 @@ that the code sends them, and that a browser cannot reproduce them, is proven.
 Some providers might ignore those headers and work directly. The design
 accommodates that (§3.3) instead of assuming.
 
-## 3. The design: static SPA + **local** egress bridge
+## 3. The design: static SPA → provider, directly
 
 ```
-┌──────────────────────────── the user's own machine ────────────────────────────┐
-│                                                                                │
-│   Browser tab                     Local Node bridge              Provider APIs │
-│  ┌──────────────┐   localhost    ┌──────────────────┐   user's  ┌────────────┐ │
-│  │  React SPA   │ ─────────────► │  bridge/server   │ ─── IP ──►│ DeepInfra  │ │
-│  │  one page    │   SSE stream   │  · sets Origin    │           │ LLMChat    │ │
-│  │              │ ◄───────────── │    Referer        │ ◄────────│ Dolphin    │ │
-│  │  model picker│   unified       │    Sec-Fetch-*    │   SSE     │ mCloudFlare│ │
-│  │  chat view   │   events        │  · holds cookies  │           │ Mercury    │ │
-│  └──────────────┘                 │    / CSRF         │           │ Upstage    │ │
-│                                   │  · normalises     │           └────────────┘ │
-│                                   │    4 wire formats │                          │
-│                                   └──────────────────┘                          │
-└────────────────────────────────────────────────────────────────────────────────┘
-        There is NO hosted server. No HF Space. No datacenter IP. No sleeping.
+┌────────────────────── the user's own machine ──────────────────────┐
+│                                                                    │
+│   Browser tab                                        Provider APIs │
+│  ┌─────────────────────────────────────┐                          │
+│  │  React SPA                          │      user's own IP       │
+│  │                                     │  ───────────────────────►│ DeepInfra
+│  │  payloads.ts  builds the exact body │                          │ LLMChat
+│  │  headers.ts   keeps what JS may set │  ◄───────────────────────│ Dolphin
+│  │  direct.ts    POSTs the real URL    │        raw SSE           │ mCloudFlare
+│  │  normalizers  4 wire formats → 1    │                          │ Mercury
+│  │  mock.ts      offline, zero network │                          │ Upstage
+│  └─────────────────────────────────────┘                          │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+   No hosted server. No relay. No Python. The provider host in DevTools
+   is the provider host the code called — nothing sits in between.
 ```
 
-### 3.1 Why this satisfies the real requirement
+### 3.1 Request formation is the part that had to be right
 
-The point of "no server" was: *stop routing everyone's traffic through one
-hosted box whose IP gets blocked / rate-limited / sleeps* — your "powering
-issue". The bridge solves exactly that:
+`resolveRequest(req)` returns the URL, method, headers and body a provider
+expects, and is a pure function — no DOM, no network — so it is unit-testable.
+Each builder in `payloads.ts` names the Python source lines it was ported from:
 
-- It runs on **the user's own machine**, so provider requests carry **the user's
-  own residential IP**. Every user is their own origin. Nothing central to block.
-- There is **no deployment, no hosting, no database, no uptime, no cost**. It is
-  not a server in the sense you're removing — it's a local helper, like a dev
-  tool. `npm run bridge`, or ship it inside the same process as the static site.
-- Node has **no forbidden-header restriction**, so it reproduces
-  `Origin`/`Referer`/`Sec-Fetch-*` byte-for-byte from the Python code, and can
-  hold Upstage/Mercury cookies and CSRF tokens.
-- `localhost` is same-origin-friendly and we control its CORS, so SPA↔bridge is
-  a non-issue.
+| Provider | Endpoint (real, from source) | Body quirks preserved |
+|---|---|---|
+| DeepInfra | `api.deepinfra.com/v1/openai/chat/completions` | `stream_options.include_usage` requested then ignored, as the Python parser does; temperature clamped 0–2 |
+| mCloudFlare | `multi-modal.ai.cloudflare.com/api/inference` | bare OpenAI-ish body; response is `{"response":…}` with no `choices` |
+| Dolphin | `chat.dphn.ai/api/chat` | **no system role** — folded into a user turn as `[SYSTEM] YOU HAVE TO ACT AS :`; `template:"creative"` |
+| LLMChat | `llmchat.in/inference/stream?model={tag}/{name}` | model in the **query string**, not the body; `temperature` omitted entirely when unset |
+| Mercury | `chat.inceptionlabs.ai/api/chat` | system → prefixed user turn; **consecutive user turns merged** with `\n\n`; `{id, role, parts:[{type,text,state:"done"?}]}` |
+| Upstage | `ap-northeast-2.apistage.ai/…?include_think=true` | `mode:["search"]` on the **last** user turn only; effort auto-derived (search→high, else low), explicit wins **only if that model accepts it**; `search_provider:"tavily"` |
 
-### 3.2 What the bridge is *not*
+### 3.2 Headers: what is sent, and what is reported instead of sent
 
-Not a reverse proxy for the internet, not a multi-tenant service, not something
-to deploy. It binds `127.0.0.1` by default. One process per user.
+`headers.ts` partitions each provider's header set against the Fetch spec's
+forbidden names (exact list **plus** the `Sec-`/`Proxy-` prefix rule, which
+covers `Sec-Fetch-*` and `sec-ch-ua*`). Direct mode sends everything settable —
+`Accept`, `Accept-Language`, `Content-Type`, `Cache-Control`, `x-request-id`,
+`x-session-token`, `x-csrf-token` — and **surfaces the remainder** rather than
+pretending. A test asserts no provider's settable set contains a forbidden name
+and that the split is lossless.
 
-### 3.3 Escape hatch: per-provider `transport`
+The three providers whose Python code asserts `Sec-Fetch-Site: same-origin`
+(mCloudFlare, Dolphin, Mercury) will instead receive `cross-site`, because a
+provider is a different site from this page. That is not hideable from any
+client-side code, and it is the single most likely cause of a refusal.
 
-Each provider declares `transport: 'bridge' | 'direct'`. Default is `bridge`.
-If you later confirm from a real browser that some provider *does* send
-`Access-Control-Allow-Origin` and ignores `Sec-Fetch-*`, flip that one provider
-to `direct` and the SPA calls it with no bridge involved. The UI, event model,
-and normalisers are identical either way — only the fetch differs. **The design
-does not require you to accept my CORS conclusion; it lets you test it per
-provider and switch.**
+### 3.3 Failure is loud, and the relay remains as an escape hatch
+
+A CORS or network failure produces an `error` event naming the exact host and
+pointing at DevTools → Network, never a silent hang. HTTP 401/403 adds a
+provider-specific hint (Upstage → CSRF panel, Mercury → fetch a session).
+
+Every provider still carries `transport: 'direct' | 'bridge'`. All seven are
+`direct`. Should one be confirmed to block cross-site reads, flipping that single
+field routes it through `bridge/server.mjs` — the relay code is retained and
+covered by `tests/integration.test.ts`, not deleted. The UI, event model and
+normalisers are identical either way; only the fetch differs.
+
+### 3.4 Credentials without a relay
+
+A browser will not let JavaScript read another site's cookies, so direct mode
+cannot capture a logged-in Upstage or Mercury session automatically. Instead the
+**Keys** panel stores a pasted Upstage CSRF token and Mercury session token in
+`localStorage` only; each is sent solely to its own provider, and "Fetch
+session" POSTs straight to `chat.inceptionlabs.ai/api/session`. Upstage's
+session cookie rides along automatically when the user is signed into the
+console in the same browser (`credentials:'include'`).
+
+`Inception.py` routes Mercury credential capture through a hardcoded
+plaintext-HTTP proxy at `217.217.249.160:8080`, whose provenance is unknown and
+which would see session material in the clear. **That proxy is not used.**
+Requests go to Inception's real host over TLS.
 
 ## 4. The core abstraction: one event model over four wire formats
 
@@ -254,30 +312,36 @@ bridge, not by `node --check` on a file I hadn't yet run).
 ```
 app/
 ├── ARCHITECTURE.md              this document
-├── package.json                 dev · build · bridge · test · gen:models
-├── vite.config.ts               SPA build; /bridge → 127.0.0.1:8787 in dev
+├── package.json                 dev · build · test · bridge (fallback) · gen:models
+├── vite.config.ts               SPA build; /bridge proxy retained for the fallback only
 ├── scripts/dump_registry.py     executes Models.py → src/data/models.ts
-├── bridge/                      LOCAL egress bridge (Node, zero dependencies)
-│   ├── server.mjs               http server, SSE relay, mock mode
-│   ├── headers.mjs              forbidden-header sets lifted from the Python source
-│   └── providers/*.mjs          one adapter per wire format A–D + mock
 ├── src/
-│   ├── types.ts                 StreamEvent, Model, Provider, Capability
+│   ├── types.ts                 StreamEvent, Model, Provider, Capability, Transport
 │   ├── data/{models,providers}.ts   generated registry + provider metadata
 │   ├── lib/
+│   │   ├── stream.ts            THE entry point: routes mock / direct / bridge
+│   │   ├── direct.ts            ★ resolveRequest() + streamDirect() → real URL
+│   │   ├── payloads.ts          ★ per-provider request bodies (browser-side)
+│   │   ├── headers.ts           ★ forbidden-vs-settable header partition
+│   │   ├── mock.ts              ★ offline simulator, in-browser, zero network
 │   │   ├── thinkSplitter.ts     verbatim port of v3 ThinkSplitter
-│   │   ├── normalizers.ts       wire formats A–D → StreamEvent
+│   │   ├── normalizers.ts       wire formats A–E → StreamEvent
 │   │   ├── sse.ts               SSE line framing
-│   │   └── bridge.ts            SPA ↔ bridge client (SSE, abort, retry)
-│   ├── components/              Sidebar (grouped by provider), ChatView,
-│   │                            Message, ThinkingBlock, Sources, Composer, UsageBar
+│   │   ├── envelope.ts          bridge envelope framing (fallback path only)
+│   │   └── bridge.ts            relay client (fallback path only)
+│   ├── components/              Sidebar (grouped by provider), Message, Composer
+│   ├── App.tsx                  thread + topbar + Keys credential panel
 │   └── styles.css
-└── tests/                       node:test — normalisers fed canned SSE fixtures
+├── bridge/                      OPT-IN FALLBACK, not started by default
+│   ├── server.mjs               relay (streamHttp bug fixed — see §6b)
+│   ├── headers.mjs · payloads.mjs · mock.mjs
+└── tests/                       node:test — 82 tests
 ```
 
-Zero runtime dependencies in the bridge (Node ≥20 built-in `http`/`fetch`) — no
-`curl_cffi` equivalent needed, because Node's TLS stack is not fingerprint-
-filtered the way Python's is, and forbidden headers are settable.
+★ = added in Revision 2. Zero runtime dependencies anywhere: the SPA is
+React + Vite only, and the fallback relay uses Node ≥20 built-in `http`/`fetch`.
+No `curl_cffi` equivalent is needed — Node's TLS stack is not fingerprint-
+filtered the way Python's is.
 
 ## 8. Verification strategy (given no network egress)
 
@@ -303,17 +367,17 @@ requires evidence this sandbox cannot produce.
 
 ```
 $ npm test
-# tests 60   # pass 60   # fail 0        duration ~4.7 s
+# tests 82   # pass 82   # fail 0        duration ~10 s
 
 $ npx tsc --noEmit
 (no output)                              exit 0
 
 $ npx vite build
-✓ 42 modules transformed
+✓ 47 modules transformed
 dist/index.html                   0.62 kB │ gzip:  0.39 kB
-dist/assets/index-*.css          13.11 kB │ gzip:  3.48 kB
-dist/assets/index-*.js          192.47 kB │ gzip: 58.82 kB
-✓ built in 1.26s                         exit 0
+dist/assets/index-*.css          14.81 kB │ gzip:  3.81 kB
+dist/assets/index-*.js          211.54 kB │ gzip: 64.41 kB
+✓ built in 1.21s                         exit 0
 
 $ python3 scripts/dump_registry.py
 FINAL: 50 models · LLMChat tags joined 24 · Upstage ids verified vs v3: 4
@@ -322,23 +386,38 @@ $ python3 scripts/gen_thinksplitter_fixtures.py
 815 cases · lossless invariant 400/400 balanced cases passed   exit 0
 ```
 
-Live pipeline checks against the running bridge:
+Direct-mode verification — **the relay was deliberately stopped first**, so
+nothing below can be passing by accident via the bridge:
 
 ```
-GET  /bridge/health (through the Vite proxy — the browser's real path)
-     -> 200, providers incl. mock/DeepInfra/mCloudFlare/Dolphin/LLMChat/Mercury/Upstage,
-        DevsDo absent, credentials {Upstage:false, Mercury:false}
-GET  /                      -> 200 (781 bytes)
-POST /bridge/chat mock      -> event: meta → event: raw … (envelope frames stream)
-POST /bridge/chat Upstage   -> event: meta → event: error{code:missing_credentials} → end
-POST /bridge/chat DevsDo    -> 404 (provider removed)
-POST /bridge/chat '{not json' -> 400
+bridge process STOPPED          -> nothing listening on :8787
+GET  /bridge/health             -> 500   (proxy target gone, as expected)
+GET  /                          -> 200   (SPA unaffected)
+Vite transform of all 9 modules -> 200, 0 transform errors
+     main.tsx App.tsx stream.ts direct.ts payloads.ts headers.ts
+     mock.ts Sidebar.tsx styles.css
 ```
 
-Test breakdown: 50 unit tests over the four wire formats, the SSE framer and the
-`ThinkSplitter`; 3 differential tests running **815 cases** generated by
-executing the original Python `ThinkSplitter`; 10 integration tests that spawn
-the real bridge and drive it through the real browser-side pipeline.
+Request formation is asserted per provider rather than eyeballed —
+`tests/direct.test.ts` checks that all six real providers resolve to their own
+`https://` endpoint with **no** `bridge`/`localhost`/`127.0.0.1`/`:8787`
+anywhere in the URL, that no settable header set contains a forbidden name, and
+that each body matches its Python original. Connection establishment is
+exercised with `fetch` stubbed: SSE framing across chunk boundaries, a CORS
+`TypeError`, an HTTP 403, and an abort that must flush held-back text.
+
+Test breakdown: 72 unit tests over the five wire formats, the SSE framer,
+`ThinkSplitter`, request formation and stubbed connections; 3 differential tests
+running **815 cases** generated by executing the original Python `ThinkSplitter`;
+10 integration tests that spawn the fallback relay and drive it through the real
+browser-side modules.
+
+**Two of the new tests failed on first run, and both failures were the test's
+fault** — recorded rather than quietly adjusted: one asserted LLMChat's URL
+equalled the bare endpoint when it legitimately appends `?model={tag}/{name}`;
+one asserted a partial `<think>` tag must *not* reach content, when flushing it at
+end-of-stream is precisely the holdback bug fixed in §6b. Discarding it was the
+defect, so the assertion was inverted, not weakened.
 
 ## 9. Migration mapping (Python → TypeScript)
 
@@ -356,15 +435,26 @@ the real bridge and drive it through the real browser-side pipeline.
 
 ## 10. Open items / not claimed
 
-- **CORS + `Sec-Fetch` enforcement per provider: UNKNOWN.** Must be tested from
-  a real browser on your machine. Flip `transport` to `direct` per provider if
-  any allow it (§3.3).
+- **CORS + `Sec-Fetch` enforcement per provider: STILL UNKNOWN, and now the
+  critical open question.** Direct mode is implemented and correct at the request
+  level, but whether each provider *answers* a cross-site browser request can
+  only be observed from a real browser with real network access. This sandbox
+  kills TLS to all six hosts. **This is the one thing to check first.** A refusal
+  surfaces as an error naming the host; flip that provider's `transport` to
+  `'bridge'` if it genuinely blocks (§3.3).
 - **No live provider call has been made or verified.** Sandbox egress is blocked.
-- **Upstage/Mercury credential capture is not ported yet.** v3 captures cookies +
-  CSRF by parsing an RSC response; that flow needs a real logged-in session to
-  develop against. The bridge accepts credentials from env/local file for now.
-- **Security review deferred** at your instruction. Flagged, not ignored: the
-  bridge sets spoofed `Origin`/`Referer` and replays captured session cookies,
-  and `Inception.py` contains a hardcoded proxy IP (`217.217.249.160:8080`) whose
-  provenance should be reviewed before this ships.
+- **Upstage/Mercury credentials must be pasted by the user** (§3.4). Automatic
+  capture is impossible in direct mode — a browser will not let JS read another
+  site's cookies. v3's RSC-parsing capture flow is therefore not ported.
+- **Security review deferred** at your instruction. Flagged, not ignored: tokens
+  live in `localStorage` (readable by any script on this origin, so no third-party
+  script may ever be added without review); the fallback relay spoofs
+  `Origin`/`Referer` and replays captured cookies; `Inception.py` hardcodes a
+  plaintext-HTTP proxy (`217.217.249.160:8080`) of unknown provenance — **not
+  used here**.
 - **Attachments** (Dolphin images/text) designed for, UI not yet wired.
+- **"and rust" is unresolved.** The request mentioned Rust after npm. No Rust
+  toolchain exists in this sandbox (`cargo`/`rustc` absent), and nothing here
+  requires one — the SPA is pure npm/TypeScript. If a Rust shell (e.g. Tauri,
+  whose HTTP plugin bypasses CORS entirely and would settle the open question
+  above) was intended, that is a separate, additive decision.
