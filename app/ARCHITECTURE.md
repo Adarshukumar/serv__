@@ -453,8 +453,8 @@ defect, so the assertion was inverted, not weakened.
   plaintext-HTTP proxy (`217.217.249.160:8080`) of unknown provenance — **not
   used here**.
 - **Attachments** (Dolphin images/text) designed for, UI not yet wired.
-- **"and rust" is unresolved.** The request mentioned Rust after npm. No Rust
-  toolchain exists in this sandbox (`cargo`/`rustc` absent), and nothing here
-  requires one — the SPA is pure npm/TypeScript. If a Rust shell (e.g. Tauri,
-  whose HTTP plugin bypasses CORS entirely and would settle the open question
-  above) was intended, that is a separate, additive decision.
+- ~~"and rust" is unresolved.~~ **RESOLVED 2026-09-23 — it was a typo.** The user
+  confirmed no Rust component is wanted; the app is pure npm/TypeScript as
+  delivered. Noted only because a Tauri shell *would* have bypassed CORS entirely
+  and settled the open question above — worth revisiting if several providers turn
+  out to block cross-site reads.

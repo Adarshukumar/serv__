@@ -44,11 +44,11 @@ build` 211.54 kB JS / 64.41 kB gzip. Committed `8dd3937`.
 can settle it. A refusal yields an error naming the host; flip that provider to
 `transport:'bridge'` if it genuinely blocks.
 
-**Unresolved:** the user's message ended *"do use npm... as for all.... and
-rust..."*. No Rust toolchain exists here (`cargo`/`rustc` absent) and nothing
-requires one. If a Rust shell was meant — e.g. **Tauri**, whose HTTP plugin
-bypasses CORS entirely and would settle the open question above — that is a
-separate additive decision and should be confirmed, not assumed.
+**Resolved:** *"and rust"* was a **typo**; the user confirmed no Rust component
+is wanted. Pure npm/TypeScript as delivered. Worth remembering that a **Tauri**
+shell would bypass CORS entirely — if several providers turn out to block
+cross-site reads, that is the escalation path, and it should be proposed rather
+than assumed.
 
 **Date:** 2026-09-23 · **Branch:** `arena/01a0ccca-serv` · **Base:** `main` @ `e57f3a2`
 **Status:** **SUBSTANTIALLY COMPLETE** — built, tested, verified offline. Live

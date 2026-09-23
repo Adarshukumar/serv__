@@ -184,7 +184,7 @@ remain unsettable from JavaScript. Direct mode sends everything settable and
 reports the remainder. Whether each provider accepts a cross-site request is its
 own CORS decision — **still UNKNOWN** and only observable from the user's browser.
 
-**Still unanswered:** what "and rust" means. No Rust toolchain exists in this
-sandbox and nothing in the delivered app requires one. Recorded as an open
-question rather than assumed; a Tauri shell would be additive and would
-incidentally bypass CORS entirely.
+**Resolved:** "and rust" was a **typo** — the user confirmed no Rust component is
+wanted. The app is pure npm/TypeScript as delivered. It was recorded as an open
+question rather than assumed, and asking cost one round-trip; assuming a Tauri
+migration would have cost far more.
