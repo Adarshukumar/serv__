@@ -13,7 +13,7 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "gen:models": "python3 scripts/dump_registry.py",
-    "bridge:fallback": "node bridge/server.mjs"
+    "bridge:fallback": "node --import tsx bridge/server.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

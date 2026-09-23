@@ -132,7 +132,12 @@ test('bridge: /bridge/health reports providers and credential state', async () =
   const body = (await res.json()) as {
     ok: boolean;
     providers: string[];
-    credentials: { Upstage: boolean; Mercury: boolean };
+    credentials: {
+      Upstage: boolean;
+      Mercury: boolean;
+      /** null until a session has been captured; then capture metadata. */
+      UpstageSession: null | { capturedAt?: string; sessionId?: string; cookieNames?: string[]; error?: string };
+    };
   };
   assert.equal(body.ok, true);
   for (const p of ['mock', 'DeepInfra', 'Dolphin', 'LLMChat', 'Mercury', 'Upstage', 'mCloudFlare']) {
@@ -141,7 +146,12 @@ test('bridge: /bridge/health reports providers and credential state', async () =
   // DevsDo was removed by instruction.
   assert.ok(!body.providers.includes('DevsDo'), 'DevsDo should be gone');
   // No credentials are configured in this sandbox, and the bridge must say so.
-  assert.deepEqual(body.credentials, { Upstage: false, Mercury: false });
+  assert.equal(body.credentials.Upstage, false);
+  assert.equal(body.credentials.Mercury, false);
+  // Upstage additionally reports its session-capture state. Nothing captured
+  // yet, and no cookie VALUES are ever exposed — names only.
+  assert.equal(body.credentials.UpstageSession, null);
+  assert.ok(!JSON.stringify(body.credentials).includes('session_id='), 'must never leak cookie values');
 });
 
 test('bridge: unknown provider returns 404, not a hang', async () => {

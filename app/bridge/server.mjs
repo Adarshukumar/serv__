@@ -20,6 +20,10 @@
 import http from 'node:http';
 import { mockStream } from './mock.mjs';
 import { HEADERS, ENDPOINTS } from './headers.mjs';
+// The RSC credential pipeline lives in TypeScript and is environment-agnostic
+// (it only uses fetch + regexes), so the relay imports it directly rather than
+// duplicating it. This is why `bridge:fallback` runs under tsx.
+import { captureCreds } from '../src/lib/upstageSession.ts';
 import {
   deepInfraPayload,
   mCloudFlarePayload,
@@ -95,15 +99,74 @@ const PROVIDERS = {
   Upstage: {
     wire: () => 'upstage-v3',
     url: () => ENDPOINTS.Upstage,
+    // The three x- headers from upstage_provider.py _stream_events(). An earlier
+    // revision sent only x-csrf-token, so x-session-id was missing and the API
+    // could not authenticate the request.
     headers: () => ({
       ...HEADERS.Upstage,
-      ...(process.env.UPSTAGE_CSRF ? { 'x-csrf-token': process.env.UPSTAGE_CSRF } : {}),
-      ...(process.env.UPSTAGE_COOKIE ? { cookie: process.env.UPSTAGE_COOKIE } : {}),
+      ...(upstageCsrf() ? { 'x-csrf-token': upstageCsrf() } : {}),
+      ...(upstageSessionId() ? { 'x-session-id': upstageSessionId() } : {}),
+      ...(upstageCookieHeader() ? { cookie: upstageCookieHeader() } : {}),
     }),
     body: (req) => upstagePayload(req),
     credentials: true,
   },
 };
+
+// ── Upstage session state, captured at runtime ─────────────────
+// Node holds a real cookie jar, which is the one thing a browser cannot do:
+// the console (console.upstage.ai) and the API (ap-northeast-2.apistage.ai)
+// are different registrable domains, and the Python client forwards the
+// console's cookies to the API manually.
+const upstageState = { csrf: null, sessionId: null, cookies: {}, capturedAt: null, error: null };
+
+/** Wrap fetch with a persistent cookie jar, the way curl_cffi's session does. */
+function createCookieJarFetch() {
+  const jar = new Map();
+  const impl = async (url, init = {}) => {
+    const headers = { ...(init.headers || {}) };
+    if (jar.size) headers.cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
+    const res = await fetch(url, { ...init, headers });
+    // Node 18.14+ exposes the full Set-Cookie list; the browser API does not.
+    for (const c of res.headers.getSetCookie?.() ?? []) {
+      const pair = c.split(';')[0];
+      const i = pair.indexOf('=');
+      if (i > 0) jar.set(pair.slice(0, i).trim(), pair.slice(i + 1).trim());
+    }
+    return res;
+  };
+  return { impl, jar };
+}
+
+/** Run the same capture flow the Python client runs, with a real cookie jar. */
+async function establishUpstageSession() {
+  const { impl, jar } = createCookieJarFetch();
+  const r = await captureCreds({ fetchImpl: impl });
+  if (r.creds.csrf) {
+    // The jar now holds the console's session cookies — the part a browser can
+    // never obtain. Merge them into the creds forwarded to the API.
+    const cookies = { ...Object.fromEntries(jar), ...r.creds.cookies };
+    upstageState.csrf = r.creds.csrf;
+    upstageState.sessionId = cookies.session_id || r.creds.sessionId;
+    upstageState.cookies = cookies;
+    upstageState.capturedAt = new Date().toISOString();
+    upstageState.error = null;
+    return { ok: true, csrf: upstageState.csrf, sessionId: upstageState.sessionId,
+             cookies, capturedAt: upstageState.capturedAt, chunksScanned: r.chunksScanned };
+  }
+  upstageState.error = `failed at step: ${r.failedStep ?? 'unknown'} — ${r.error ?? ''}`;
+  return { ok: false, error: upstageState.error, cookies: {}, chunksScanned: r.chunksScanned };
+}
+
+/** Env vars still win, so an existing manual setup keeps working. */
+const upstageCsrf = () => process.env.UPSTAGE_CSRF || upstageState.csrf || null;
+const upstageSessionId = () => process.env.UPSTAGE_SESSION_ID || upstageState.sessionId || null;
+const upstageCookieHeader = () => {
+  if (process.env.UPSTAGE_COOKIE) return process.env.UPSTAGE_COOKIE;
+  const s = Object.entries(upstageState.cookies).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join('; ');
+  return s || null;
+};
+const upstageReady = () => Boolean(upstageCsrf() && upstageCookieHeader());
 
 /** Generic streaming runner: POST, then pipe the response body verbatim. */
 async function streamHttp(def, req, emit, signal) {
@@ -114,15 +177,21 @@ async function streamHttp(def, req, emit, signal) {
   emit('meta', { provider: req.provider, wire, model: req.modelId, url });
 
   if (def.credentials) {
-    const has = req.provider === 'Upstage'
-      ? Boolean(process.env.UPSTAGE_COOKIE && process.env.UPSTAGE_CSRF)
-      : Boolean(process.env.MERCURY_TOKEN);
+    // Upstage: try to establish the session automatically first, exactly as
+    // UpstageProvider.connect() does, before reporting a credential failure.
+    if (req.provider === 'Upstage' && !upstageReady()) {
+      emit('status', { phase: 'connecting', detail: 'Establishing Upstage session (RSC capture)…' });
+      await establishUpstageSession();
+    }
+
+    const has = req.provider === 'Upstage' ? upstageReady() : Boolean(process.env.MERCURY_TOKEN);
     if (!has) {
       emit('error', {
         message:
-          `${req.provider} needs captured session credentials. Supply them to the bridge as ` +
-          (req.provider === 'Upstage' ? 'UPSTAGE_COOKIE + UPSTAGE_CSRF' : 'MERCURY_TOKEN') +
-          ' environment variables. Credential capture is not ported yet (ARCHITECTURE.md §10).',
+          req.provider === 'Upstage'
+            ? `Upstage needs captured session credentials. Automatic capture ${upstageState.error ? `failed (${upstageState.error})` : 'has not run'}. ` +
+              `POST /bridge/upstage/session to retry, or supply UPSTAGE_CSRF + UPSTAGE_COOKIE + UPSTAGE_SESSION_ID as environment variables.`
+            : `Mercury needs captured session credentials (a session token). Supply MERCURY_TOKEN as an environment variable.`,
         retryable: false,
         code: 'missing_credentials',
       });
@@ -227,12 +296,24 @@ const server = http.createServer(async (req, res) => {
       providers: Object.keys(PROVIDERS),
       // Report honestly which providers this bridge could actually reach.
       credentials: {
-        Upstage: Boolean(process.env.UPSTAGE_COOKIE && process.env.UPSTAGE_CSRF),
+        Upstage: upstageReady(),
+        UpstageSession: upstageState.capturedAt
+          ? { capturedAt: upstageState.capturedAt, sessionId: upstageState.sessionId, cookieNames: Object.keys(upstageState.cookies) }
+          : upstageState.error ? { error: upstageState.error } : null,
         Mercury: Boolean(process.env.MERCURY_TOKEN),
       },
       node: process.version,
       pid: process.pid,
     });
+  }
+
+  // Establish (or re-establish) the Upstage session on demand.
+  if (req.method === 'POST' && path === '/bridge/upstage/session') {
+    const out = await establishUpstageSession();
+    // Never echo cookie VALUES back to the browser — names only.
+    const { cookies, ...safe } = out;
+    json(res, out.ok ? 200 : 502, { ...safe, cookieNames: Object.keys(cookies || {}) });
+    return;
   }
 
   if (req.method === 'GET' && path === '/bridge/providers') {
@@ -307,7 +388,12 @@ const server = http.createServer(async (req, res) => {
 
   return sendJson(res, 404, {
     error: 'not found',
-    routes: ['GET /bridge/health', 'GET /bridge/providers', 'POST /bridge/chat'],
+    routes: [
+      'GET /bridge/health',
+      'GET /bridge/providers',
+      'POST /bridge/chat',
+      'POST /bridge/upstage/session',
+    ],
   });
 });
 
@@ -316,7 +402,10 @@ server.listen(PORT, HOST, () => {
   console.log(`[bridge] listening on http://${shown}:${PORT}`);
   console.log(`[bridge] providers: ${Object.keys(PROVIDERS).join(', ')}`);
   console.log('[bridge] this process runs on YOUR machine — provider calls leave from YOUR IP');
-  if (!process.env.UPSTAGE_COOKIE) console.log('[bridge] UPSTAGE_COOKIE/UPSTAGE_CSRF not set — Upstage will report missing_credentials');
+  if (!process.env.UPSTAGE_COOKIE) {
+    console.log('[bridge] UPSTAGE_COOKIE/UPSTAGE_CSRF not set — Upstage will attempt automatic RSC capture on first use');
+    console.log('[bridge]   (or POST /bridge/upstage/session to capture it now)');
+  }
   if (!process.env.MERCURY_TOKEN) console.log('[bridge] MERCURY_TOKEN not set — Mercury will report missing_credentials');
 });
 
