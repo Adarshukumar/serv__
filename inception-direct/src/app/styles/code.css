@@ -1,0 +1,155 @@
+/* ───────────────────────── code blocks ───────────────────────── */
+
+.code-block {
+  margin: 1.2em 0;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  background: var(--code-bg);
+  overflow: hidden;
+  max-width: var(--measure);
+}
+
+.code-block figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px 7px 14px;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-ui);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.code-copy {
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--ink-3);
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.code-copy:hover {
+  color: var(--ink);
+  background: var(--paper-raised);
+}
+
+.code-block pre {
+  margin: 0;
+  padding: 14px 16px 16px;
+  overflow-x: auto;
+  font-size: calc(var(--reading-size) * 0.74);
+  line-height: 1.62;
+  tab-size: 2;
+  font-variant-ligatures: none;
+  hyphens: none;
+}
+
+.code-block code {
+  font-family: var(--font-mono);
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+/* Token colours — ink on paper, a few quiet hues */
+.hljs-comment,
+.hljs-quote {
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-meta .hljs-keyword {
+  color: var(--accent);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: #3f7a4f;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet {
+  color: #8a5a12;
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name {
+  color: #2f5b8a;
+  font-weight: 560;
+}
+
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-title.class_ {
+  color: #7a3f86;
+}
+
+.hljs-attr,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-property {
+  color: #5a4a8a;
+}
+
+.hljs-deletion {
+  color: var(--bad);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 650;
+}
+
+[data-theme='night'] .hljs-string,
+[data-theme='night'] .hljs-regexp,
+[data-theme='night'] .hljs-addition,
+[data-theme='night'] .hljs-attribute,
+[data-theme='night'] .hljs-meta .hljs-string {
+  color: #8fcf9c;
+}
+
+[data-theme='night'] .hljs-number,
+[data-theme='night'] .hljs-literal,
+[data-theme='night'] .hljs-symbol,
+[data-theme='night'] .hljs-bullet {
+  color: #e3b36a;
+}
+
+[data-theme='night'] .hljs-title,
+[data-theme='night'] .hljs-title.function_,
+[data-theme='night'] .hljs-section,
+[data-theme='night'] .hljs-name {
+  color: #8db8e8;
+}
+
+[data-theme='night'] .hljs-type,
+[data-theme='night'] .hljs-class .hljs-title,
+[data-theme='night'] .hljs-title.class_ {
+  color: #d3a0dd;
+}
+
+[data-theme='night'] .hljs-attr,
+[data-theme='night'] .hljs-variable,
+[data-theme='night'] .hljs-template-variable,
+[data-theme='night'] .hljs-property {
+  color: #b3a6e6;
+}
