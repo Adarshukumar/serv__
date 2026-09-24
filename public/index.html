@@ -4,6 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>☀️ Upstage Solar — live</title>
+<script src="/upstage-client.js"></script>
 <style>
   :root {
     color-scheme: dark;
@@ -86,12 +87,12 @@
 <aside>
   <div>
     <h1>☀️ Upstage Solar</h1>
-    <div class="banner">multi-turn like Python · direct your-IP · no relay</div>
+    <div class="banner">browser → northeast DIRECT (your IP) · no server hop</div>
   </div>
 
   <div id="status">loading…</div>
   <div class="row">
-    <button id="btnConnect" class="secondary" type="button">Force /connect (creds)</button>
+    <button id="btnConnect" class="secondary" type="button">Connect (browser → console, your IP)</button>
     <button id="btnNet" class="secondary" type="button">Refresh IP log</button>
   </div>
 
@@ -301,27 +302,55 @@ function escapeHtml(s) {
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
 
-/** Optional manual creds capture — NOT called on page load. */
+/** Browser-direct connect (user IP). Server /api/connect only as fallback. */
 async function doConnect() {
   $('btnConnect').disabled = true;
-  $('status').textContent = 'capturing credentials (real console)…';
+  $('status').textContent = 'browser → console.upstage.ai (your IP) …';
   $('status').className = '';
+
+  // ── preferred: browser extracts token itself ──
+  if (window.UpstageBrowser) {
+    try {
+      const csrf = await UpstageBrowser.captureCredentials();
+      connected = true;
+      pill('pillCsrf', true, 'csrf ✓ browser');
+      $('status').textContent =
+        'connected BROWSER-DIRECT · csrf ' + String(csrf).slice(0, 18) + '… · no server hop';
+      $('status').className = 'ok';
+      refreshNetwork(true);
+      return;
+    } catch (e) {
+      console.warn('browser capture failed, trying server fallback', e);
+      UpstageBrowser.log('browser-capture-fallback', { error: String(e.message || e) });
+      $('status').textContent = 'browser path: ' + e.message + ' — trying local fallback…';
+      // fall through to server
+    }
+  }
+
+  // ── fallback: local process (also user IP when npm runs on their machine) ──
   try {
     const j = await api('/api/connect', { method: 'POST' });
-    pill('pillCsrf', j.csrf_valid, j.csrf_valid ? 'csrf ✓' : 'csrf ✗');
-    $('status').textContent = j.csrf_valid ? 'creds ok' : 'token missing?';
-    $('status').className = j.csrf_valid ? 'ok' : 'bad';
-    connected = j.csrf_valid;
-    if (j.network_log) renderNetLog({ egress: null, log: j.network_log, path: null, targets: null });
+    // server now always returns 200 + {ok:…} — never bare 502
+    if (j.ok && j.csrf_valid) {
+      connected = true;
+      pill('pillCsrf', true, 'csrf ✓ server');
+      $('status').textContent = 'connected via local process fallback';
+      $('status').className = 'ok';
+    } else {
+      connected = false;
+      pill('pillCsrf', false, 'csrf ✗');
+      $('status').textContent = 'connect failed: ' + (j.error || 'unknown');
+      $('status').className = 'bad';
+    }
+    if (j.network_log) {
+      $('netlog').textContent = j.network_log
+        .map((x) => `${x.t.slice(11, 19)} ${x.event} ${typeof x.detail === 'string' ? x.detail : JSON.stringify(x.detail)}`)
+        .join('\n');
+    }
   } catch (e) {
     pill('pillCsrf', false, 'csrf ✗');
     $('status').textContent = 'connect: ' + e.message;
     $('status').className = 'bad';
-    if (e.payload?.network_log) {
-      $('netlog').textContent = e.payload.network_log
-        .map((x) => `${x.t.slice(11, 19)} ${x.event} ${typeof x.detail === 'string' ? x.detail : JSON.stringify(x.detail)}`)
-        .join('\n');
-    }
   } finally {
     $('btnConnect').disabled = false;
   }
@@ -373,78 +402,116 @@ async function send() {
 
   let events = 0;
   let sawThink = false;
-  try {
-    if ($('stream').checked) {
-      const resp = await fetch('/api/chat/stream', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(bodyOpts(text)),
-      });
-      if (!resp.ok) {
-        const j = await resp.json().catch(() => ({}));
-        throw new Error(j.error || ('HTTP ' + resp.status));
-      }
-      const reader = resp.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf('\n\n')) >= 0) {
-          const frame = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          let kind = '', data = '';
-          for (const ln of frame.split('\n')) {
-            if (ln.startsWith('event: ')) kind = ln.slice(7);
-            else if (ln.startsWith('data: ')) data = ln.slice(6);
-          }
-          if (!kind || !data) continue;
-          const obj = JSON.parse(data);
-          events++;
-          if (kind === 'thinking') {
-            if (!sawThink) { thinkEl.textContent = '💭 '; sawThink = true; }
-            thinkEl.textContent += obj.text;
-          } else if (kind === 'content') {
-            contEl.textContent += obj.text;
-          } else if (kind === 'sources') {
-            try {
-              const list = JSON.parse(obj.text).sources || [];
-              srcEl.innerHTML = list.map((s, i) =>
-                `[${i + 1}] <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title)}</a>`
-              ).join('<br/>');
-            } catch { /* ignore */ }
-          } else if (kind === 'usage') {
-            // Python TurnUsage.format_line() parity
-            usageEl.textContent = '   ' + (obj.format_line || formatLine(obj));
-          } else if (kind === 'eof') {
-            if (Array.isArray(obj.history_roles)) {
-              pill('pillTurns', true, `${obj.turn} msg`);
-            }
-          } else if (kind === 'error') {
-            contEl.innerHTML += `<span class="err">⚠ ${escapeHtml(obj.error)}</span>`;
-            if (obj.auth) {
-              contEl.innerHTML += `<br/><span class="err">first message may auto-capture creds — or hit Force /connect</span>`;
-            }
-            if (obj.network_log?.length) {
-              $('netlog').textContent = obj.network_log
-                .map((x) => `${x.t.slice(11, 19)} ${x.event} ${typeof x.detail === 'string' ? x.detail : JSON.stringify(x.detail)}`)
-                .join('\n');
-            }
-          }
-          chatEl.scrollTop = chatEl.scrollHeight;
+  let usedPath = null;
+
+  // helper: render thinking/content/sources/usage into the bubble
+  const onEvent = (kind, obj) => {
+    events++;
+    if (kind === 'thinking') {
+      if (!sawThink) { thinkEl.textContent = '💭 '; sawThink = true; }
+      thinkEl.textContent += obj.text;
+    } else if (kind === 'content') {
+      contEl.textContent += obj.text;
+    } else if (kind === 'sources') {
+      try {
+        // browser path sends raw search_queries JSON; server sends {sources:[…]}
+        let list = [];
+        const parsed = JSON.parse(obj.text);
+        if (Array.isArray(parsed)) {
+          list = (parsed[0] && parsed[0].results ? parsed[0].results : parsed).map((r) => ({
+            title: r.title || r.url,
+            url: r.url,
+          }));
+        } else if (Array.isArray(parsed.sources)) {
+          list = parsed.sources;
         }
+        srcEl.innerHTML = list.map((s, i) =>
+          `[${i + 1}] <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title)}</a>`
+        ).join('<br/>');
+      } catch { /* ignore */ }
+    } else if (kind === 'usage') {
+      usageEl.textContent = '   ' + (obj.format_line || formatLine(obj));
+    }
+    chatEl.scrollTop = chatEl.scrollHeight;
+  };
+
+  try {
+    // ═══ PREFERRED: browser → ap-northeast-2 DIRECT (user IP) ═══
+    if ($('stream').checked && window.UpstageBrowser) {
+      // ensure model registry for payload defaults
+      try {
+        const models = await api('/api/models');
+        UpstageBrowser.configure({
+          models: Object.fromEntries(models.models.map((m) => [m.name, {
+            temperature: 0.8,
+            max_tokens: m.max_tokens,
+            reasoning: m.reasoning,
+            search: m.search,
+          }])),
+        });
+      } catch { /* optional */ }
+
+      try {
+        usedPath = 'browser';
+        const opts = {
+          messages: null, // multi-turn via prompt + local history below
+          model: $('models').value || 'solar-pro3',
+          search: $('search').checked,
+          reasoning: $('reasoning').value || null,
+          maxTokens: Number($('maxTokens').value) || 512,
+          temperature: $('temperature').value === '' ? null : Number($('temperature').value),
+          system: $('system').value || null,
+        };
+
+        // build OpenAI-style messages: history + new user turn (Python data mode)
+        const hist = UpstageBrowser.state.history;
+        const msgs = hist.map((m) => ({ role: m.role, content: m.content }));
+        msgs.push({ role: 'user', content: text });
+        if (!$('keepHistory').checked) msgs.splice(0, Math.max(0, msgs.length - 1));
+        opts.messages = msgs;
+
+        for await (const ev of UpstageBrowser.streamChat(opts)) {
+          if (ev.kind === 'done') break;
+          onEvent(ev.kind, ev);
+        }
+
+        // record multi-turn history client-side (Python parity)
+        if ($('keepHistory').checked) {
+          const full = UpstageBrowser.state.history;
+          full.push({ role: 'user', content: text });
+          full.push({ role: 'assistant', content: contEl.textContent });
+          UpstageBrowser.state.history = full;
+        }
+        const u = window.__UPSTAGE_LAST_USAGE;
+        if (u && !usageEl.textContent) usageEl.textContent = '   ' + formatLine(u);
+        pill('pillCsrf', true, 'csrf ✓ browser');
+        pill('pillTurns', true, `${UpstageBrowser.state.history.length} msg`);
+        $('status').textContent = 'last turn: BROWSER-DIRECT → ap-northeast-2 (your IP)';
+        $('status').className = 'ok';
+      } catch (e) {
+        // CORS / network on browser path → server fallback (log it)
+        UpstageBrowser.log('browser-stream-fallback', { error: String(e.message || e) });
+        usedPath = 'server';
+        contEl.textContent = '';
+        usageEl.textContent = '';
+        $('status').textContent = 'browser path failed (' + e.message + ') — server fallback…';
+        $('status').className = '';
+        await streamViaServer(bodyOpts(text), { thinkEl, contEl, srcEl, usageEl, sawThinkRef: { v: sawThink }, onEvent });
+        pill('pillCsrf', false, 'via server');
+        pill('pillTurns', true, 'server fallback');
       }
-      if (!usageEl.textContent && sawThink) {
-        /* leave blank if no usage */
-      }
+    } else if ($('stream').checked) {
+      usedPath = 'server';
+      await streamViaServer(bodyOpts(text), { thinkEl, contEl, srcEl, usageEl, onEvent });
     } else {
+      // non-stream JSON (server or browser) — use server JSON for simplicity
+      usedPath = 'server';
       const j = await api('/api/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(bodyOpts(text)),
       });
+      if (!j.ok) throw new Error(j.error || 'chat failed');
       events = 1;
       if (j.reasoning) thinkEl.textContent = '💭 ' + j.reasoning;
       contEl.textContent = j.response;
@@ -460,6 +527,10 @@ async function send() {
     contEl.innerHTML += `<span class="err">⚠ ${escapeHtml(e.message)}</span>`;
     $('status').textContent = e.message;
     $('status').className = 'bad';
+    if (String(e.message).includes('502')) {
+      $('status').textContent =
+        'unexpected 502 — origin should return JSON; try reloading (client was updated to never emit 502)';
+    }
     if (e.payload?.network_log) {
       $('netlog').textContent = e.payload.network_log
         .map((x) => `${x.t.slice(11, 19)} ${x.event} ${typeof x.detail === 'string' ? x.detail : JSON.stringify(x.detail)}`)
@@ -467,10 +538,64 @@ async function send() {
     }
   } finally {
     const secs = ((performance.now() - t0) / 1000).toFixed(2);
-    $('stat').textContent = `turn ${turnCount} · ${events} events · ${secs}s`;
+    $('stat').textContent = `turn ${turnCount} · ${events} events · ${secs}s · ${usedPath || '?'}`;
     $('send').disabled = false;
     refreshStatus();
     refreshNetwork(false);
+  }
+}
+
+/** Server SSE fallback (local npm process). */
+async function streamViaServer(body, slots) {
+  const { thinkEl, contEl, srcEl, usageEl, onEvent } = slots;
+  const resp = await fetch('/api/chat/stream', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const j = await resp.json().catch(() => null);
+  // server must never 502 — if it did, surface JSON error clearly
+  if (!resp.ok) {
+    const msg = (j && j.error) || 'HTTP ' + resp.status;
+    throw new Error(resp.status === 502 ? 'origin 502: ' + msg : msg);
+  }
+  // When status is 200 but body is SSE, j may be null (streamed).
+  // Our stream endpoint always returns text/event-stream with 200.
+  const ct = resp.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    // unexpected JSON (error path encoded as 200)
+    if (j && j.ok === false) throw new Error(j.error || 'chat failed');
+    throw new Error('expected SSE stream');
+  }
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const frame = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      let kind = '', data = '';
+      for (const ln of frame.split('\n')) {
+        if (ln.startsWith('event: ')) kind = ln.slice(7);
+        else if (ln.startsWith('data: ')) data = ln.slice(6);
+      }
+      if (!kind || !data) continue;
+      const obj = JSON.parse(data);
+      if (kind === 'eof') {
+        if (Array.isArray(obj.history_roles)) {
+          pill('pillTurns', true, `${obj.turn} msg`);
+        }
+        continue;
+      }
+      if (kind === 'error') {
+        throw new Error(obj.error || 'stream error');
+      }
+      onEvent(kind, obj);
+    }
   }
 }
 
@@ -518,11 +643,30 @@ $('btnReset').onclick = async () => {
 (async function init() {
   await refreshHealth();
   await loadModels();
-  // network log FIRST (real IP) — does NOT call /connect
   await refreshNetwork(true);
   await refreshStatus();
+
+  // pull endpoints from health so browser client matches server config
+  try {
+    const h = await api('/api/health');
+    if (window.UpstageBrowser) {
+      UpstageBrowser.configure({
+        console: h.console,
+        api: h.api_base,
+      });
+      UpstageBrowser.onNetLog(() => {
+        // live-append browser-path lines into the network panel
+        const pre = $('netlog');
+        const lines = (window.__UPSTAGE_NET_LOG || []).slice(-12).map((e) =>
+          `${e.t.slice(11, 19)} ${e.event} ${typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail)}`
+        );
+        pre.textContent = lines.join('\n');
+      });
+    }
+  } catch { /* optional */ }
+
   $('status').textContent =
-    'ready — send a message (creds auto-capture on first msg, like Python). Force /connect optional.';
+    'ready — Connect uses BROWSER → console (your IP). Send streams BROWSER → ap-northeast-2 first; server is only a fallback.';
   $('status').className = 'ok';
 })();
 </script>

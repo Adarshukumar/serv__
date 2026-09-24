@@ -197,13 +197,32 @@ async function handle(req, res) {
       api_base: apiBase(),
       node: process.version,
       pid: process.pid,
+      // browser-direct preferred: page calls Upstage with visitor IP
+      browser_client: '/upstage-client.js',
+      connect_preferred: 'browser',
       topology: {
-        ui_bind: 'dual-stack loopback/LAN (same machine)',
-        outbound: 'direct from this process = user public IP',
+        ui: 'static from this process',
+        connect_and_stream: 'BROWSER → console + apistage (visitor IP, no server hop)',
+        server_fallback: 'optional local process path (also visitor IP when npm runs on their machine)',
         relay: 'none',
         proxy: 'none',
       },
     }, isHead);
+    return;
+  }
+
+  // static asset: browser client bundle
+  if ((req.method === 'GET' || isHead) && p === '/upstage-client.js') {
+    const file = path.join(PUBLIC_DIR, 'upstage-client.js');
+    const stat = fs.statSync(file);
+    res.writeHead(200, {
+      'content-type': 'text/javascript; charset=utf-8',
+      'cache-control': 'no-cache',
+      'content-length': stat.size,
+      'access-control-allow-origin': '*',
+    });
+    if (isHead) res.end();
+    else fs.createReadStream(file).pipe(res);
     return;
   }
 
@@ -265,22 +284,28 @@ async function handle(req, res) {
   }
 
   if (p === '/api/connect' && req.method === 'POST') {
+    // Preferred path is BROWSER-direct (user IP) — see public/upstage-client.js.
+    // This endpoint remains as a local-process fallback. NEVER return 5xx here:
+    // a 502 from origin is rendered by Cloudflare as "Error code 502".
     const up = providerFor(sess);
     try {
       await up.connect();
       const token = await up._creds.verify();
       sendJSON(res, 200, {
         ok: true,
+        mode: 'server-process',
         csrf_valid: Boolean(token),
         action_token: up._creds.actionToken,
         session_id: up._creds.sessionId,
         network_log: netLogTail(30),
       });
     } catch (e) {
-      sendJSON(res, 502, {
+      // 200 + ok:false — UI shows the real error; proxy never sees 502
+      sendJSON(res, 200, {
         ok: false,
+        mode: 'server-process',
         error: String(e.message || e),
-        hint: 'Real console.upstage.ai must be reachable from this machine.',
+        hint: 'Use browser-direct connect (UpstageBrowser.captureCredentials) — it uses YOUR IP with no server hop. This fallback only runs when the local process can reach the console.',
         network_log: netLogTail(30),
       });
     }
@@ -325,11 +350,12 @@ async function handle(req, res) {
         history_roles: up.history.map((m) => m.role),
       });
     } catch (e) {
-      const status = e instanceof UpstageAuthError ? 401 : 502;
-      sendJSON(res, status, {
+      // NEVER 502 — Cloudflare would show "Error code 502" instead of our JSON
+      sendJSON(res, 200, {
         ok: false,
         error: String(e.message || e),
         type: e.constructor.name,
+        suggest: 'browser-direct path (UpstageBrowser.streamChat) uses visitor IP',
         network_log: netLogTail(20),
       });
     }
