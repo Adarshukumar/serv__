@@ -52,3 +52,11 @@ export function groupConversations(list: readonly ConversationMeta[], now = new 
   }
   return [...groups.entries()].map(([label, items]) => ({ label, items }));
 }
+
+/** 2680806 → "2.6 MB" (decimal units, like browsers' download bars). */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes < 1000) return `${Math.round(bytes)} B`;
+  if (bytes < 999_500) return `${Math.round(bytes / 1000)} kB`;
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}

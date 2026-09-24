@@ -13,7 +13,7 @@
  * so the simulator enables CORS. Extension-only pieces (host permissions, header
  * rules, site-tab bridge) are covered by tests/extension.test.ts.
  */
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
 import { createServer } from 'vite';
@@ -247,6 +247,22 @@ await step('as a plain web page, the real site is blocked and the page explains 
   await p.waitForSelector('.notice[data-tone="muted"]', { timeout: 20_000 });
   const text = await p.$eval('.notice', (el) => el.textContent ?? '');
   assert(text.includes('Load unpacked'), 'install instructions shown');
+
+  // With `npm run zip` done, the page's own server offers the ready-built extension.
+  const { version } = JSON.parse(readFileSync(`${root}package.json`, 'utf8'));
+  if (existsSync(`${root}inception-direct-${version}.zip`)) {
+    await p.waitForSelector('a.notice-download[download]', { timeout: 10_000 });
+    const href = await p.$eval('a.notice-download', (el) => /** @type {HTMLAnchorElement} */ (el).href);
+    const res = await fetch(href);
+    assert(res.ok && res.headers.get('content-type') === 'application/zip', `download served: ${res.status} ${res.headers.get('content-type')}`);
+    assert((res.headers.get('content-disposition') ?? '').includes(`inception-direct-${version}.zip`), 'saved under its versioned name');
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    assert(bytes[0] === 0x50 && bytes[1] === 0x4b, 'the download is a zip archive');
+    assert((await p.$eval('a.notice-download', (el) => el.textContent ?? '')).includes('MB'), 'size shown on the button');
+  } else {
+    await new Promise((r) => setTimeout(r, 800));
+    assert((await p.$('a.notice-download')) === null, 'no download button before `npm run zip`');
+  }
   await p.screenshot({ path: `${shots}/09-web-preview-blocked.png` });
   await p.close();
 });

@@ -47,6 +47,16 @@ npm run build          # type-check + build the extension into dist/
 To update later, run `npm run build` again and press the reload icon on the extension card.
 `npm run zip` packs `dist/` into `inception-direct-<version>.zip` if you want to share it.
 
+### Or: grab it from a running preview
+
+```bash
+npm run build && npm run zip && npm run preview -- --host 0.0.0.0
+```
+
+The preview is the same UI served as a plain web page, so it can't chat (see above). Instead it
+offers a **Download the extension** button: download it, unzip it, and **Load unpacked** the
+unzipped folder. The zip is served by the preview server only; it is never copied into `dist/`.
+
 ## How it works
 
 ```
@@ -146,11 +156,15 @@ npm test             # unit + integration tests (Vitest)
 npm run typecheck    # TypeScript 7
 npm run build        # type-check + extension build into dist/
 npm run check        # all of the above
+npm run zip          # pack dist/ into inception-direct-<version>.zip
+npm run preview      # serve dist/ as a web page (http://localhost:4173), with the zip as a download
 CHROME_PATH=/path/to/chrome npm run test:e2e   # drive the real UI in Chromium, with screenshots
 ```
 
-As a normal web page (`npm run dev`), the app shows why it can't reach Inception from there and
-how to install the extension. Nothing is faked.
+As a normal web page (`npm run dev` or `npm run preview`), the app really tries to create the
+session from your browser and shows why it can't reach Inception from there, plus how to
+install the extension (with a download button once `npm run zip` has run). Nothing is faked.
+Behind a proxied host, allow it with `VITE_ALLOWED_HOSTS=.example.com npm run preview`.
 
 ```
 src/

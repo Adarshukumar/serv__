@@ -81,3 +81,8 @@ export const GlobeIcon = (p: IconProps) => (
     <path d="M3.5 12h17M12 3.5c2.5 2.6 3.7 5.4 3.7 8.5s-1.2 5.9-3.7 8.5c-2.5-2.6-3.7-5.4-3.7-8.5s1.2-5.9 3.7-8.5z" />
   </Svg>
 );
+export const DownloadIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14" />
+  </Svg>
+);
