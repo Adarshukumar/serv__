@@ -77,7 +77,7 @@
 <aside>
   <div>
     <h1>☀️ Upstage Solar</h1>
-    <div class="banner">real API · your IP · no mock</div>
+    <div class="banner">direct · your IP · no relay · loopback UI</div>
   </div>
 
   <div id="status">checking /api/health …</div>
@@ -167,7 +167,7 @@ async function refreshHealth() {
     const h = await api('/api/health');
     $('status').textContent = `console=${h.console}  api=${h.api_base}`;
     $('status').className = 'ok';
-    $('epLine').textContent = `${h.console} → ${h.api_base}`;
+    $('epLine').textContent = `direct → ${h.api_base}  ·  relay: none`;
     pill('pillLive', true, 'api up');
   } catch (e) {
     $('status').textContent = 'health failed: ' + e.message;
@@ -198,7 +198,7 @@ async function refreshIP() {
     const j = await api('/api/ip');
     if (j.ip) {
       pill('pillIp', true, 'your ip');
-      $('ipLine').textContent = `egress IP: ${j.ip}  (outbound = this machine)`;
+      $('ipLine').textContent = `your egress IP: ${j.ip}  (direct, no server hop)`;
     } else {
       $('ipLine').textContent = 'egress IP: unreachable from this network';
     }

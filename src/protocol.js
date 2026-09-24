@@ -2,7 +2,7 @@
  * protocol.js — pure logic: SSE parser, think-tag splitter, source
  * formatter, stream events, usage department. No I/O.
  *
- * Direct port of New Upstage Change Logs upstage_provider.py §4–§8.
+ * Pure-logic half of the Upstage Solar v3 wire protocol. No I/O.
  */
 import { MODELS, resolveModel } from './config.js';
 

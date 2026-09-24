@@ -146,6 +146,9 @@ export class Credentials {
       headers: { 'user-agent': UA },
       https: { rejectUnauthorized: true },
       followRedirect: true,
+      // direct socket from this machine — no proxy agent ever
+      agent: undefined,
+      proxy: undefined,
     };
   }
 

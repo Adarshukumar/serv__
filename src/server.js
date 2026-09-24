@@ -37,7 +37,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
 const PORT = Number(process.env.PORT || 8486);
-const HOST = process.env.HOST || '0.0.0.0';
+/**
+ * Loopback by default: the UI is same-machine only — no LAN/public
+ * "server IP" is ever exposed. Outbound to Upstage always opens from
+ * this process (the user's IP), independent of this bind address.
+ * Set HOST=0.0.0.0 only if you deliberately need remote UI access.
+ */
+const HOST = process.env.HOST || '127.0.0.1';
 
 /** One provider per browser session key (default conversation). */
 const providers = new Map();
@@ -183,6 +189,12 @@ async function handle(req, res) {
       api_base: apiBase(),
       node: process.version,
       pid: process.pid,
+      topology: {
+        ui_bind: 'loopback (same machine)',
+        outbound: 'direct from this process = user public IP',
+        relay: 'none',
+        proxy: 'none',
+      },
     });
     return;
   }
@@ -343,11 +355,13 @@ export function startServer(port = PORT, host = HOST) {
     });
   });
   server.listen(port, host, () => {
+    const shown = host === '0.0.0.0' || host === '::' ? 'localhost' : host;
     console.log(`☀️  upstage-solar-npm`);
-    console.log(`   UI/API   http://localhost:${port}`);
-    console.log(`   console  ${consoleUrl()}`);
-    console.log(`   api      ${apiBase()}`);
-    console.log(`   egress   this machine's public IP (no proxy, no relay)`);
+    console.log(`   UI (loopback only)  http://${shown}:${port}`);
+    console.log(`   console             ${consoleUrl()}`);
+    console.log(`   api                 ${apiBase()}`);
+    console.log(`   outbound            DIRECT from this machine (your public IP)`);
+    console.log(`   relay / proxy       none — no server IP in the path`);
   });
   return server;
 }

@@ -11,6 +11,17 @@
 import os from 'node:os';
 import path from 'node:path';
 
+// ── hard guarantee: never route Upstage traffic through any proxy ──
+// (user IP only — clear standard proxy env vars that undici/got honor)
+for (const k of [
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy',
+]) {
+  delete process.env[k];
+}
+process.env.NO_PROXY = '*';
+process.env.no_proxy = '*';
+
+
 export const consoleUrl = () =>
   (process.env.UPSTAGE_CONSOLE_URL || 'https://console.upstage.ai').replace(/\/+$/, '');
 
