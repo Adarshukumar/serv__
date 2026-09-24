@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>☀️ Upstage Solar — live</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0e14; --panel: #121722; --border: #2a3345;
+    --text: #d7dde8; --dim: #7a8496; --accent: #ffd166;
+    --think: #8b95ab; --content: #e8edf7; --src: #8ecae6;
+    --ok: #6bcb77; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: var(--bg); color: var(--text);
+    display: grid; grid-template-columns: 300px 1fr; height: 100vh;
+  }
+  aside {
+    border-right: 1px solid var(--border); background: var(--panel);
+    padding: 1rem; overflow-y: auto; display: flex; flex-direction: column; gap: .75rem;
+  }
+  main { display: flex; flex-direction: column; min-width: 0; }
+  h1 { font-size: 1rem; margin: 0; color: var(--accent); }
+  h2 { font-size: .75rem; margin: .5rem 0 .25rem; color: var(--dim);
+       text-transform: uppercase; letter-spacing: .08em; }
+  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: .15rem; }
+  select, textarea, input[type="text"], input[type="number"] {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: .45rem .55rem;
+    font: inherit;
+  }
+  textarea { resize: vertical; min-height: 72px; }
+  .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .check { display: flex; align-items: center; gap: .4rem; font-size: 13px; color: var(--text); }
+  .check input { width: auto; }
+  button {
+    background: var(--accent); color: #111; border: 0; border-radius: 8px;
+    padding: .5rem .9rem; font-weight: 700; cursor: pointer; font: inherit;
+  }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  #status {
+    font-size: 12px; padding: .5rem; border-radius: 8px;
+    background: var(--bg); border: 1px solid var(--border); word-break: break-all;
+  }
+  #status.ok { border-color: var(--ok); } #status.bad { border-color: var(--err); }
+  .pill { display: inline-block; padding: .1rem .45rem; border-radius: 999px;
+          font-size: 11px; border: 1px solid var(--border); margin-right: .3rem; }
+  .pill.on { border-color: var(--ok); color: var(--ok); }
+  .pill.off { border-color: var(--dim); color: var(--dim); }
+  #chat { flex: 1; overflow-y: auto; padding: 1rem 1.25rem; }
+  .msg { margin-bottom: 1rem; white-space: pre-wrap; }
+  .msg .who { font-size: 11px; color: var(--dim); margin-bottom: .2rem; }
+  .msg.user .body { color: var(--src); }
+  .msg.assistant .body { color: var(--content); }
+  .think { color: var(--think); font-style: italic; }
+  .meta { color: var(--dim); font-size: 12px; margin-top: .35rem; }
+  .sources { color: var(--src); font-size: 13px; margin-top: .4rem; }
+  .sources a { color: var(--src); }
+  .err { color: var(--err); }
+  footer { border-top: 1px solid var(--border); padding: .85rem 1.25rem; }
+  #prompt { min-height: 64px; }
+  .sendrow { display: flex; gap: .6rem; margin-top: .5rem; align-items: center; }
+  #stat { font-size: 12px; color: var(--dim); }
+  #models option small { color: var(--dim); }
+  .banner { font-size: 12px; color: var(--dim); }
+  @media (max-width: 800px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; }
+    aside { max-height: 40vh; }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div>
+    <h1>☀️ Upstage Solar</h1>
+    <div class="banner">real API · your IP · no mock</div>
+  </div>
+
+  <div id="status">checking /api/health …</div>
+  <div class="row">
+    <button id="btnConnect" class="secondary" type="button">Connect / refresh creds</button>
+  </div>
+
+  <div>
+    <h2>Connection</h2>
+    <div id="conn">
+      <span class="pill off" id="pillCsrf">csrf</span>
+      <span class="pill off" id="pillLive">live</span>
+      <span class="pill off" id="pillIp">ip</span>
+    </div>
+    <div class="banner" id="ipLine">egress IP: …</div>
+    <div class="banner" id="epLine"></div>
+  </div>
+
+  <div>
+    <h2>Model</h2>
+    <label for="models">select (all registered models)</label>
+    <select id="models"></select>
+    <div class="banner" id="modelMeta"></div>
+  </div>
+
+  <div>
+    <h2>Options</h2>
+    <label class="check"><input type="checkbox" id="search" /> web search (tavily + high reasoning)</label>
+    <label for="reasoning" style="margin-top:.5rem">reasoning effort</label>
+    <select id="reasoning">
+      <option value="">auto (search→high, else low)</option>
+      <option>low</option><option>medium</option><option>high</option>
+    </select>
+    <label for="maxTokens" style="margin-top:.5rem">max tokens</label>
+    <input type="number" id="maxTokens" value="256" min="16" max="65536" />
+    <label for="temperature" style="margin-top:.5rem">temperature (blank = model default)</label>
+    <input type="number" id="temperature" step="0.1" min="0" max="2" placeholder="default" />
+    <label for="system" style="margin-top:.5rem">system prompt</label>
+    <textarea id="system" rows="2" placeholder="(optional)"></textarea>
+    <label class="check" style="margin-top:.5rem"><input type="checkbox" id="stream" checked /> stream (SSE)</label>
+  </div>
+
+  <div>
+    <h2>Session</h2>
+    <div class="row">
+      <button id="btnUsage" class="secondary" type="button">/usage</button>
+      <button id="btnReset" class="secondary" type="button">/reset</button>
+    </div>
+    <pre id="usageReport" class="banner" style="white-space:pre-wrap"></pre>
+  </div>
+</aside>
+
+<main>
+  <div id="chat"></div>
+  <footer>
+    <textarea id="prompt" placeholder="Ask Solar… (Enter to send, Shift+Enter for newline)"></textarea>
+    <div class="sendrow">
+      <button id="send" type="button">Send</button>
+      <span id="stat"></span>
+    </div>
+  </footer>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const chatEl = $('chat');
+let connected = false;
+
+function pill(id, on, label) {
+  const el = $(id);
+  el.className = 'pill ' + (on ? 'on' : 'off');
+  if (label) el.textContent = label;
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok && !opts?.allowError) {
+    const msg = j.error || j.detail || ('HTTP ' + r.status);
+    throw new Error(msg);
+  }
+  return j;
+}
+
+async function refreshHealth() {
+  try {
+    const h = await api('/api/health');
+    $('status').textContent = `console=${h.console}  api=${h.api_base}`;
+    $('status').className = 'ok';
+    $('epLine').textContent = `${h.console} → ${h.api_base}`;
+    pill('pillLive', true, 'api up');
+  } catch (e) {
+    $('status').textContent = 'health failed: ' + e.message;
+    $('status').className = 'bad';
+    pill('pillLive', false, 'api down');
+  }
+}
+
+async function refreshStatus() {
+  try {
+    const s = await api('/api/status');
+    connected = s.csrf_valid;
+    pill('pillCsrf', s.csrf_valid, s.csrf_valid ? 'csrf ✓' : 'csrf ✗');
+    $('usageReport').textContent = s.turns
+      ? `turns=${s.turns} tokens≈${s.usage.tokens} sources=${s.usage.sources}`
+      : '';
+    if (s.error) {
+      $('status').textContent = s.error;
+      $('status').className = 'bad';
+    }
+  } catch (e) {
+    pill('pillCsrf', false, 'csrf ?');
+  }
+}
+
+async function refreshIP() {
+  try {
+    const j = await api('/api/ip');
+    if (j.ip) {
+      pill('pillIp', true, 'your ip');
+      $('ipLine').textContent = `egress IP: ${j.ip}  (outbound = this machine)`;
+    } else {
+      $('ipLine').textContent = 'egress IP: unreachable from this network';
+    }
+  } catch {
+    $('ipLine').textContent = 'egress IP: probe failed';
+  }
+}
+
+async function loadModels() {
+  const j = await api('/api/models');
+  const sel = $('models');
+  sel.innerHTML = '';
+  for (const m of j.models) {
+    const opt = document.createElement('option');
+    opt.value = m.name;
+    opt.textContent = (m.active ? '★ ' : '') + m.name + (m.label ? ` — ${m.label}` : '');
+    if (m.active) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  updateModelMeta(j.models);
+  sel.onchange = () => updateModelMeta(j.models, sel.value);
+}
+
+function updateModelMeta(models, name) {
+  const activeName = name || $('models').value;
+  const m = models.find((x) => x.name === activeName);
+  if (!m) return;
+  $('modelMeta').textContent =
+    `reasoning=${JSON.stringify(m.reasoning)} · search=${m.search} · max=${m.max_tokens}`;
+}
+
+function appendBlock(cls, html) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + cls;
+  div.innerHTML = html;
+  chatEl.appendChild(div);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return div;
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+async function doConnect() {
+  $('btnConnect').disabled = true;
+  $('status').textContent = 'capturing credentials from console.upstage.ai …';
+  $('status').className = '';
+  try {
+    const j = await api('/api/connect', { method: 'POST' });
+    pill('pillCsrf', j.csrf_valid, j.csrf_valid ? 'csrf ✓' : 'csrf ✗');
+    $('status').textContent = j.csrf_valid
+      ? `connected · action=${j.action_token.slice(0,16)}… · session=${j.session_id.slice(0,8)}…`
+      : 'connected but token missing?';
+    $('status').className = j.csrf_valid ? 'ok' : 'bad';
+    connected = j.csrf_valid;
+  } catch (e) {
+    pill('pillCsrf', false, 'csrf ✗');
+    $('status').textContent = 'connect failed: ' + e.message;
+    $('status').className = 'bad';
+    connected = false;
+  } finally {
+    $('btnConnect').disabled = false;
+  }
+}
+
+function bodyOpts() {
+  return {
+    prompt: $('prompt').value,
+    model: $('models').value || null,
+    search: $('search').checked,
+    reasoning: $('reasoning').value || null,
+    max_tokens: Number($('maxTokens').value) || 256,
+    temperature: $('temperature').value === '' ? null : Number($('temperature').value),
+    system: $('system').value || null,
+  };
+}
+
+async function send() {
+  const text = $('prompt').value.trim();
+  if (!text) return;
+  $('send').disabled = true;
+  $('stat').textContent = '…';
+  const t0 = performance.now();
+  $('prompt').value = '';
+
+  appendBlock('user', `<div class="who">you ▸</div><div class="body">${escapeHtml(text)}</div>`);
+
+  const body = bodyOpts();
+  const wrap = appendBlock('assistant',
+    `<div class="who">assistant ▸</div>` +
+    `<div class="think" data-think></div>` +
+    `<div class="body" data-content></div>` +
+    `<div class="sources" data-src></div>` +
+    `<div class="meta" data-meta></div>`);
+  const thinkEl = wrap.querySelector('[data-think]');
+  const contEl = wrap.querySelector('[data-content]');
+  const srcEl = wrap.querySelector('[data-src]');
+  const metaEl = wrap.querySelector('[data-meta]');
+
+  let events = 0;
+  try {
+    if ($('stream').checked) {
+      const resp = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) {
+        const j = await resp.json().catch(() => ({}));
+        throw new Error(j.error || ('HTTP ' + resp.status));
+      }
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          let kind = '', data = '';
+          for (const ln of frame.split('\n')) {
+            if (ln.startsWith('event: ')) kind = ln.slice(7);
+            else if (ln.startsWith('data: ')) data = ln.slice(6);
+          }
+          if (!kind || !data) continue;
+          const obj = JSON.parse(data);
+          events++;
+          if (kind === 'thinking') thinkEl.textContent += obj.text;
+          else if (kind === 'content') contEl.textContent += obj.text;
+          else if (kind === 'sources') {
+            try {
+              const list = JSON.parse(obj.text).sources || [];
+              srcEl.innerHTML = list.map((s, i) =>
+                `[${i+1}] <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title)}</a>`
+              ).join('<br/>');
+            } catch { /* ignore */ }
+          }
+          else if (kind === 'usage') {
+            metaEl.textContent =
+              `⏱ ${obj.elapsed_s}s · first ${obj.first_token_s}s · ~${obj.tokens} tok` +
+              `${obj.tokens_estimated ? ' (est)' : ''} · ${obj.model}` +
+              (obj.n_sources ? ` · 📚 ${obj.n_sources}` : '');
+          }
+          else if (kind === 'error') {
+            contEl.innerHTML += `<span class="err">⚠ ${escapeHtml(obj.error)}</span>`;
+            if (obj.auth) contEl.innerHTML += `<br/><span class="err">try Connect / refresh creds</span>`;
+          }
+          chatEl.scrollTop = chatEl.scrollHeight;
+        }
+      }
+    } else {
+      const j = await api('/api/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      events = 1;
+      if (j.reasoning) thinkEl.textContent = j.reasoning;
+      contEl.textContent = j.response;
+      if (j.sources?.length) {
+        srcEl.innerHTML = j.sources.map((s, i) =>
+          `[${i+1}] <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title)}</a>`
+        ).join('<br/>');
+      }
+      if (j.usage) {
+        metaEl.textContent =
+          `⏱ ${j.usage.elapsed_s}s · ~${j.usage.tokens} tok · ${j.usage.model}` +
+          (j.usage.n_sources ? ` · 📚 ${j.usage.n_sources}` : '');
+      }
+    }
+  } catch (e) {
+    contEl.innerHTML += `<span class="err">⚠ ${escapeHtml(e.message)}</span>`;
+    $('status').textContent = e.message;
+    $('status').className = 'bad';
+  } finally {
+    const secs = ((performance.now() - t0) / 1000).toFixed(2);
+    $('stat').textContent = `${events} events · ${secs}s`;
+    $('send').disabled = false;
+    refreshStatus();
+  }
+}
+
+$('send').onclick = send;
+$('btnConnect').onclick = doConnect;
+$('prompt').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+$('btnUsage').onclick = async () => {
+  const j = await api('/api/usage');
+  $('usageReport').textContent = j.report;
+};
+$('btnReset').onclick = async () => {
+  await api('/api/session/reset', { method: 'POST' });
+  chatEl.innerHTML = '';
+  $('usageReport').textContent = '';
+  $('stat').textContent = 'session reset';
+};
+
+(async function init() {
+  await refreshHealth();
+  await loadModels();
+  await refreshStatus();
+  await refreshIP();
+  if (!connected) {
+    $('status').textContent = 'not connected — click “Connect / refresh creds” (real capture from console.upstage.ai)';
+    $('status').className = 'bad';
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "name": "upstage-solar-npm",
+  "version": "1.0.0",
+  "description": "Upstage Solar provider + live UI — full Node.js port of New Upstage Change Logs (v3). Real console.upstage.ai credential capture + SSE streaming. No mocks.",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "upstage-solar": "bin/upstage.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/protocol.test.js",
+    "test:live": "UPSTAGE_LIVE=1 node --test test/live.test.js"
+  },
+  "engines": { "node": ">=18.0.0" },
+  "license": "MIT",
+  "dependencies": {
+    "got-scraping": "^4.2.1",
+    "tough-cookie": "^5.1.2"
+  }
+}
