@@ -28,6 +28,7 @@ import {
   consoleUrl,
   credFile,
 } from './config.js';
+import { logOutbound, netLog } from './network.js';
 
 const CHUNK_RE = /static\/chunks\/[^"\s\],]+\.js/g;
 
@@ -209,6 +210,12 @@ export class Credentials {
 
   // ── capture via pure HTTP ───────────────────────────────
   async capture() {
+    netLog('creds-capture-start', { console: consoleUrl() });
+    try {
+      await logOutbound(`${consoleUrl()}${chatPath()}`);
+    } catch {
+      /* ignore log errors */
+    }
     // 1) page load — sets session cookies
     const page = await gotScraping.get(`${consoleUrl()}${chatPath()}`, {
       ...this._client(),
@@ -284,6 +291,10 @@ export class Credentials {
 
     this.sessionId = this.cookies.session_id || crypto.randomUUID();
     await this.save();
+    netLog('creds-capture-ok', {
+      action: `${actionToken.slice(0, 12)}…`,
+      session: this.sessionId.slice(0, 8),
+    });
     return this._lastToken;
   }
 }

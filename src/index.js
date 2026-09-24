@@ -12,6 +12,13 @@ export {
 } from './provider.js';
 export { Credentials, findActionId } from './creds.js';
 export {
+  egressIP,
+  localInterfaces,
+  netLog,
+  netLogTail,
+  networkReport,
+} from './network.js';
+export {
   MODELS,
   resolveModel,
   consoleUrl,

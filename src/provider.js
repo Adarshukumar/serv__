@@ -18,6 +18,7 @@ import {
 } from './config.js';
 import { MODELS } from './config.js';
 import { Credentials } from './creds.js';
+import { logOutbound } from './network.js';
 import {
   SessionUsage,
   Sources,
@@ -99,6 +100,13 @@ export class UpstageProvider {
   async *_streamEvents(payload) {
     const { gotScraping } = await import('got-scraping');
     const csrf = await this._getCsrf();
+
+    // network log: real egress IP + target (does NOT require /connect UI action)
+    try {
+      await logOutbound(completionsUrl());
+    } catch {
+      /* logging must never break the stream */
+    }
 
     const headers = {
       accept: '*/*',

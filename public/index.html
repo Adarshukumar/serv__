@@ -16,7 +16,7 @@
   body {
     margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
     background: var(--bg); color: var(--text);
-    display: grid; grid-template-columns: 300px 1fr; height: 100vh;
+    display: grid; grid-template-columns: 320px 1fr; height: 100vh;
   }
   aside {
     border-right: 1px solid var(--border); background: var(--panel);
@@ -52,12 +52,15 @@
   .pill.on { border-color: var(--ok); color: var(--ok); }
   .pill.off { border-color: var(--dim); color: var(--dim); }
   #chat { flex: 1; overflow-y: auto; padding: 1rem 1.25rem; }
-  .msg { margin-bottom: 1rem; white-space: pre-wrap; }
+  .msg { margin-bottom: 1.1rem; white-space: pre-wrap; }
   .msg .who { font-size: 11px; color: var(--dim); margin-bottom: .2rem; }
   .msg.user .body { color: var(--src); }
   .msg.assistant .body { color: var(--content); }
   .think { color: var(--think); font-style: italic; }
-  .meta { color: var(--dim); font-size: 12px; margin-top: .35rem; }
+  .usage-line {
+    color: var(--dim); font-size: 12px; margin-top: .4rem;
+    border-left: 2px solid var(--border); padding-left: .5rem;
+  }
   .sources { color: var(--src); font-size: 13px; margin-top: .4rem; }
   .sources a { color: var(--src); }
   .err { color: var(--err); }
@@ -65,11 +68,17 @@
   #prompt { min-height: 64px; }
   .sendrow { display: flex; gap: .6rem; margin-top: .5rem; align-items: center; }
   #stat { font-size: 12px; color: var(--dim); }
-  #models option small { color: var(--dim); }
   .banner { font-size: 12px; color: var(--dim); }
+  #netlog {
+    font-size: 11px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: .45rem; max-height: 160px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-all; color: var(--dim);
+  }
+  #netlog .ip { color: var(--ok); }
+  #netlog .fail { color: var(--err); }
   @media (max-width: 800px) {
     body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; }
-    aside { max-height: 40vh; }
+    aside { max-height: 45vh; }
   }
 </style>
 </head>
@@ -77,53 +86,57 @@
 <aside>
   <div>
     <h1>☀️ Upstage Solar</h1>
-    <div class="banner">direct · your IP · no relay · loopback UI</div>
+    <div class="banner">multi-turn like Python · direct your-IP · no relay</div>
   </div>
 
-  <div id="status">checking /api/health …</div>
+  <div id="status">loading…</div>
   <div class="row">
-    <button id="btnConnect" class="secondary" type="button">Connect / refresh creds</button>
+    <button id="btnConnect" class="secondary" type="button">Force /connect (creds)</button>
+    <button id="btnNet" class="secondary" type="button">Refresh IP log</button>
   </div>
 
   <div>
-    <h2>Connection</h2>
+    <h2>Network log (real IP)</h2>
     <div id="conn">
       <span class="pill off" id="pillCsrf">csrf</span>
-      <span class="pill off" id="pillLive">live</span>
+      <span class="pill off" id="pillLive">api</span>
       <span class="pill off" id="pillIp">ip</span>
+      <span class="pill off" id="pillTurns">turns</span>
     </div>
-    <div class="banner" id="ipLine">egress IP: …</div>
+    <div class="banner" id="ipLine">egress IP: probing…</div>
     <div class="banner" id="epLine"></div>
+    <pre id="netlog">waiting for /api/network…</pre>
   </div>
 
   <div>
     <h2>Model</h2>
-    <label for="models">select (all registered models)</label>
     <select id="models"></select>
     <div class="banner" id="modelMeta"></div>
   </div>
 
   <div>
     <h2>Options</h2>
-    <label class="check"><input type="checkbox" id="search" /> web search (tavily + high reasoning)</label>
-    <label for="reasoning" style="margin-top:.5rem">reasoning effort</label>
+    <label class="check"><input type="checkbox" id="search" /> web search (tavily)</label>
+    <label for="reasoning" style="margin-top:.5rem">reasoning</label>
     <select id="reasoning">
-      <option value="">auto (search→high, else low)</option>
+      <option value="">auto</option>
       <option>low</option><option>medium</option><option>high</option>
     </select>
     <label for="maxTokens" style="margin-top:.5rem">max tokens</label>
-    <input type="number" id="maxTokens" value="256" min="16" max="65536" />
-    <label for="temperature" style="margin-top:.5rem">temperature (blank = model default)</label>
+    <input type="number" id="maxTokens" value="512" min="16" max="65536" />
+    <label for="temperature" style="margin-top:.5rem">temperature (blank = default)</label>
     <input type="number" id="temperature" step="0.1" min="0" max="2" placeholder="default" />
     <label for="system" style="margin-top:.5rem">system prompt</label>
     <textarea id="system" rows="2" placeholder="(optional)"></textarea>
     <label class="check" style="margin-top:.5rem"><input type="checkbox" id="stream" checked /> stream (SSE)</label>
+    <label class="check"><input type="checkbox" id="keepHistory" checked /> keep history (multi-turn)</label>
   </div>
 
   <div>
     <h2>Session</h2>
     <div class="row">
       <button id="btnUsage" class="secondary" type="button">/usage</button>
+      <button id="btnHistory" class="secondary" type="button">/history</button>
       <button id="btnReset" class="secondary" type="button">/reset</button>
     </div>
     <pre id="usageReport" class="banner" style="white-space:pre-wrap"></pre>
@@ -133,7 +146,7 @@
 <main>
   <div id="chat"></div>
   <footer>
-    <textarea id="prompt" placeholder="Ask Solar… (Enter to send, Shift+Enter for newline)"></textarea>
+    <textarea id="prompt" placeholder="you ▸  message… (Enter send · Shift+Enter newline) — history kept like Python REPL"></textarea>
     <div class="sendrow">
       <button id="send" type="button">Send</button>
       <span id="stat"></span>
@@ -145,6 +158,7 @@
 const $ = (id) => document.getElementById(id);
 const chatEl = $('chat');
 let connected = false;
+let turnCount = 0;
 
 function pill(id, on, label) {
   const el = $(id);
@@ -157,17 +171,69 @@ async function api(path, opts) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok && !opts?.allowError) {
     const msg = j.error || j.detail || ('HTTP ' + r.status);
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.payload = j;
+    throw err;
   }
   return j;
+}
+
+function renderNetLog(report) {
+  const lines = [];
+  if (report.egress?.ip) {
+    lines.push(`EGRESS IP: ${report.egress.ip}`);
+    lines.push(`  via ${report.egress.via}`);
+    lines.push(`  = source Upstage sees (direct, no relay)`);
+  } else {
+    lines.push(`EGRESS IP: ${report.egress?.error || 'unknown'}`);
+    lines.push(`  (IP echo blocked; sockets still open from this host)`);
+  }
+  if (report.path) {
+    lines.push(`relay: ${report.path.relay} · proxy: ${report.path.proxy_env}`);
+  }
+  lines.push('── log ──');
+  for (const e of (report.log || []).slice(-20)) {
+    const d = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail);
+    lines.push(`${e.t.slice(11, 19)} ${e.event} ${d}`);
+  }
+  const pre = $('netlog');
+  pre.textContent = lines.join('\n');
+  // highlight IP line
+  if (report.egress?.ip) {
+    pre.innerHTML = pre.innerHTML.replace(
+      `EGRESS IP: ${report.egress.ip}`,
+      `<span class="ip">EGRESS IP: ${report.egress.ip}</span>`,
+    );
+  } else {
+    pre.innerHTML = `<span class="fail">${pre.textContent}</span>`;
+  }
+
+  if (report.egress?.ip) {
+    pill('pillIp', true, report.egress.ip);
+    $('ipLine').textContent = `your IP → ${report.egress.ip}  (direct)`;
+  } else {
+    pill('pillIp', false, 'ip ?');
+    $('ipLine').textContent = 'egress IP: probe blocked on this network';
+  }
+  if (report.targets) {
+    $('epLine').textContent = `→ ${report.targets.completions} · relay none`;
+  }
+}
+
+async function refreshNetwork(force = false) {
+  try {
+    const r = await api('/api/network' + (force ? '?force=1' : ''));
+    renderNetLog(r);
+  } catch (e) {
+    $('netlog').textContent = 'network log failed: ' + e.message;
+  }
 }
 
 async function refreshHealth() {
   try {
     const h = await api('/api/health');
-    $('status').textContent = `console=${h.console}  api=${h.api_base}`;
+    $('status').textContent = `api up · ${h.api_base}`;
     $('status').className = 'ok';
-    $('epLine').textContent = `direct → ${h.api_base}  ·  relay: none`;
     pill('pillLive', true, 'api up');
   } catch (e) {
     $('status').textContent = 'health failed: ' + e.message;
@@ -180,30 +246,22 @@ async function refreshStatus() {
   try {
     const s = await api('/api/status');
     connected = s.csrf_valid;
-    pill('pillCsrf', s.csrf_valid, s.csrf_valid ? 'csrf ✓' : 'csrf ✗');
+    pill('pillCsrf', Boolean(s.csrf_valid), s.csrf_valid ? 'csrf ✓' : 'csrf ·');
+    pill('pillTurns', s.turns > 0, `${s.turns} turns`);
+    turnCount = s.history;
     $('usageReport').textContent = s.turns
-      ? `turns=${s.turns} tokens≈${s.usage.tokens} sources=${s.usage.sources}`
+      ? `turns=${s.turns} · msg=${s.history} · tok≈${s.usage.tokens}`
       : '';
-    if (s.error) {
-      $('status').textContent = s.error;
-      $('status').className = 'bad';
-    }
-  } catch (e) {
-    pill('pillCsrf', false, 'csrf ?');
-  }
-}
-
-async function refreshIP() {
-  try {
-    const j = await api('/api/ip');
-    if (j.ip) {
-      pill('pillIp', true, 'your ip');
-      $('ipLine').textContent = `your egress IP: ${j.ip}  (direct, no server hop)`;
-    } else {
-      $('ipLine').textContent = 'egress IP: unreachable from this network';
+    if (s.network_log?.length) {
+      // merge server-side log if we don't have network report yet
+      if ($('netlog').textContent.startsWith('waiting')) {
+        $('netlog').textContent = s.network_log
+          .map((e) => `${e.t.slice(11, 19)} ${e.event} ${typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail)}`)
+          .join('\n');
+      }
     }
   } catch {
-    $('ipLine').textContent = 'egress IP: probe failed';
+    pill('pillCsrf', false, 'csrf ?');
   }
 }
 
@@ -223,8 +281,7 @@ async function loadModels() {
 }
 
 function updateModelMeta(models, name) {
-  const activeName = name || $('models').value;
-  const m = models.find((x) => x.name === activeName);
+  const m = models.find((x) => x.name === (name || $('models').value));
   if (!m) return;
   $('modelMeta').textContent =
     `reasoning=${JSON.stringify(m.reasoning)} · search=${m.search} · max=${m.max_tokens}`;
@@ -240,43 +297,57 @@ function appendBlock(cls, html) {
 }
 
 function escapeHtml(s) {
-  return s.replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  return String(s).replace(/[&<>"]/g, (c) =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
 
+/** Optional manual creds capture — NOT called on page load. */
 async function doConnect() {
   $('btnConnect').disabled = true;
-  $('status').textContent = 'capturing credentials from console.upstage.ai …';
+  $('status').textContent = 'capturing credentials (real console)…';
   $('status').className = '';
   try {
     const j = await api('/api/connect', { method: 'POST' });
     pill('pillCsrf', j.csrf_valid, j.csrf_valid ? 'csrf ✓' : 'csrf ✗');
-    $('status').textContent = j.csrf_valid
-      ? `connected · action=${j.action_token.slice(0,16)}… · session=${j.session_id.slice(0,8)}…`
-      : 'connected but token missing?';
+    $('status').textContent = j.csrf_valid ? 'creds ok' : 'token missing?';
     $('status').className = j.csrf_valid ? 'ok' : 'bad';
     connected = j.csrf_valid;
+    if (j.network_log) renderNetLog({ egress: null, log: j.network_log, path: null, targets: null });
   } catch (e) {
     pill('pillCsrf', false, 'csrf ✗');
-    $('status').textContent = 'connect failed: ' + e.message;
+    $('status').textContent = 'connect: ' + e.message;
     $('status').className = 'bad';
-    connected = false;
+    if (e.payload?.network_log) {
+      $('netlog').textContent = e.payload.network_log
+        .map((x) => `${x.t.slice(11, 19)} ${x.event} ${typeof x.detail === 'string' ? x.detail : JSON.stringify(x.detail)}`)
+        .join('\n');
+    }
   } finally {
     $('btnConnect').disabled = false;
   }
 }
 
-function bodyOpts() {
+function bodyOpts(text) {
   return {
-    prompt: $('prompt').value,
+    prompt: text,
     model: $('models').value || null,
     search: $('search').checked,
     reasoning: $('reasoning').value || null,
-    max_tokens: Number($('maxTokens').value) || 256,
+    max_tokens: Number($('maxTokens').value) || 512,
     temperature: $('temperature').value === '' ? null : Number($('temperature').value),
     system: $('system').value || null,
+    // Python parity: keep multi-turn history by default
+    fresh: !$('keepHistory').checked,
   };
 }
 
+/**
+ * Send one message — Python REPL style:
+ *   you ▸ …
+ *   assistant ▸ 💭 thinking… 📝 answer…
+ *      ⏱ 3.2s · first token 1.1s · ~128 tok (est) · 40 tok/s · solar-pro3
+ * History is KEPT across turns (unless keep-history is off).
+ */
 async function send() {
   const text = $('prompt').value.trim();
   if (!text) return;
@@ -284,28 +355,30 @@ async function send() {
   $('stat').textContent = '…';
   const t0 = performance.now();
   $('prompt').value = '';
+  turnCount += 1;
 
-  appendBlock('user', `<div class="who">you ▸</div><div class="body">${escapeHtml(text)}</div>`);
+  appendBlock('user',
+    `<div class="who">you ▸</div><div class="body">${escapeHtml(text)}</div>`);
 
-  const body = bodyOpts();
   const wrap = appendBlock('assistant',
     `<div class="who">assistant ▸</div>` +
     `<div class="think" data-think></div>` +
     `<div class="body" data-content></div>` +
     `<div class="sources" data-src></div>` +
-    `<div class="meta" data-meta></div>`);
+    `<div class="usage-line" data-usage></div>`);
   const thinkEl = wrap.querySelector('[data-think]');
   const contEl = wrap.querySelector('[data-content]');
   const srcEl = wrap.querySelector('[data-src]');
-  const metaEl = wrap.querySelector('[data-meta]');
+  const usageEl = wrap.querySelector('[data-usage]');
 
   let events = 0;
+  let sawThink = false;
   try {
     if ($('stream').checked) {
       const resp = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(bodyOpts(text)),
       });
       if (!resp.ok) {
         const j = await resp.json().catch(() => ({}));
@@ -330,63 +403,95 @@ async function send() {
           if (!kind || !data) continue;
           const obj = JSON.parse(data);
           events++;
-          if (kind === 'thinking') thinkEl.textContent += obj.text;
-          else if (kind === 'content') contEl.textContent += obj.text;
-          else if (kind === 'sources') {
+          if (kind === 'thinking') {
+            if (!sawThink) { thinkEl.textContent = '💭 '; sawThink = true; }
+            thinkEl.textContent += obj.text;
+          } else if (kind === 'content') {
+            contEl.textContent += obj.text;
+          } else if (kind === 'sources') {
             try {
               const list = JSON.parse(obj.text).sources || [];
               srcEl.innerHTML = list.map((s, i) =>
-                `[${i+1}] <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title)}</a>`
+                `[${i + 1}] <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title)}</a>`
               ).join('<br/>');
             } catch { /* ignore */ }
-          }
-          else if (kind === 'usage') {
-            metaEl.textContent =
-              `⏱ ${obj.elapsed_s}s · first ${obj.first_token_s}s · ~${obj.tokens} tok` +
-              `${obj.tokens_estimated ? ' (est)' : ''} · ${obj.model}` +
-              (obj.n_sources ? ` · 📚 ${obj.n_sources}` : '');
-          }
-          else if (kind === 'error') {
+          } else if (kind === 'usage') {
+            // Python TurnUsage.format_line() parity
+            usageEl.textContent = '   ' + (obj.format_line || formatLine(obj));
+          } else if (kind === 'eof') {
+            if (Array.isArray(obj.history_roles)) {
+              pill('pillTurns', true, `${obj.turn} msg`);
+            }
+          } else if (kind === 'error') {
             contEl.innerHTML += `<span class="err">⚠ ${escapeHtml(obj.error)}</span>`;
-            if (obj.auth) contEl.innerHTML += `<br/><span class="err">try Connect / refresh creds</span>`;
+            if (obj.auth) {
+              contEl.innerHTML += `<br/><span class="err">first message may auto-capture creds — or hit Force /connect</span>`;
+            }
+            if (obj.network_log?.length) {
+              $('netlog').textContent = obj.network_log
+                .map((x) => `${x.t.slice(11, 19)} ${x.event} ${typeof x.detail === 'string' ? x.detail : JSON.stringify(x.detail)}`)
+                .join('\n');
+            }
           }
           chatEl.scrollTop = chatEl.scrollHeight;
         }
+      }
+      if (!usageEl.textContent && sawThink) {
+        /* leave blank if no usage */
       }
     } else {
       const j = await api('/api/chat', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(bodyOpts(text)),
       });
       events = 1;
-      if (j.reasoning) thinkEl.textContent = j.reasoning;
+      if (j.reasoning) thinkEl.textContent = '💭 ' + j.reasoning;
       contEl.textContent = j.response;
       if (j.sources?.length) {
         srcEl.innerHTML = j.sources.map((s, i) =>
-          `[${i+1}] <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title)}</a>`
+          `[${i + 1}] <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title)}</a>`
         ).join('<br/>');
       }
-      if (j.usage) {
-        metaEl.textContent =
-          `⏱ ${j.usage.elapsed_s}s · ~${j.usage.tokens} tok · ${j.usage.model}` +
-          (j.usage.n_sources ? ` · 📚 ${j.usage.n_sources}` : '');
-      }
+      usageEl.textContent = '   ' + (j.usage_line || (j.usage ? formatLine(j.usage) : ''));
+      pill('pillTurns', true, `${j.history_roles?.length || turnCount} msg`);
     }
   } catch (e) {
     contEl.innerHTML += `<span class="err">⚠ ${escapeHtml(e.message)}</span>`;
     $('status').textContent = e.message;
     $('status').className = 'bad';
+    if (e.payload?.network_log) {
+      $('netlog').textContent = e.payload.network_log
+        .map((x) => `${x.t.slice(11, 19)} ${x.event} ${typeof x.detail === 'string' ? x.detail : JSON.stringify(x.detail)}`)
+        .join('\n');
+    }
   } finally {
     const secs = ((performance.now() - t0) / 1000).toFixed(2);
-    $('stat').textContent = `${events} events · ${secs}s`;
+    $('stat').textContent = `turn ${turnCount} · ${events} events · ${secs}s`;
     $('send').disabled = false;
     refreshStatus();
+    refreshNetwork(false);
   }
+}
+
+/** Fallback Python-style usage line. */
+function formatLine(u) {
+  const bits = [`⏱ ${(u.elapsed_s ?? 0).toFixed(1)}s`];
+  if (u.first_token_s != null) bits.push(`first token ${u.first_token_s.toFixed(2)}s`);
+  if (u.tokens) {
+    bits.push(`~${u.tokens} tok${u.tokens_estimated ? ' (est)' : ''}`);
+    if (u.tokens_per_s) bits.push(`${Math.round(u.tokens_per_s)} tok/s`);
+    else if (u.elapsed_s > 0) bits.push(`${Math.round(u.tokens / u.elapsed_s)} tok/s`);
+  }
+  if (u.thinking_chars) bits.push(`💭 ${u.thinking_chars}c`);
+  bits.push(u.model);
+  if (u.n_sources) bits.push(`📚 ${u.n_sources}`);
+  return bits.join(' · ');
 }
 
 $('send').onclick = send;
 $('btnConnect').onclick = doConnect;
+$('btnNet').onclick = () => refreshNetwork(true);
 $('prompt').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
 });
@@ -394,22 +499,31 @@ $('btnUsage').onclick = async () => {
   const j = await api('/api/usage');
   $('usageReport').textContent = j.report;
 };
+$('btnHistory').onclick = async () => {
+  const s = await api('/api/status');
+  $('usageReport').textContent = s.history
+    ? `history msg=${s.history} turns=${s.turns}\n` +
+      `csrf=${s.csrf_valid} session=${(s.session_id || '').slice(0, 8)}…`
+    : '(empty history)';
+};
 $('btnReset').onclick = async () => {
   await api('/api/session/reset', { method: 'POST' });
   chatEl.innerHTML = '';
   $('usageReport').textContent = '';
+  turnCount = 0;
+  pill('pillTurns', false, '0 turns');
   $('stat').textContent = 'session reset';
 };
 
 (async function init() {
   await refreshHealth();
   await loadModels();
+  // network log FIRST (real IP) — does NOT call /connect
+  await refreshNetwork(true);
   await refreshStatus();
-  await refreshIP();
-  if (!connected) {
-    $('status').textContent = 'not connected — click “Connect / refresh creds” (real capture from console.upstage.ai)';
-    $('status').className = 'bad';
-  }
+  $('status').textContent =
+    'ready — send a message (creds auto-capture on first msg, like Python). Force /connect optional.';
+  $('status').className = 'ok';
 })();
 </script>
 </body>

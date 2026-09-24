@@ -32,6 +32,7 @@ import {
   UpstageStreamError,
 } from './provider.js';
 import { apiBase, consoleUrl } from './config.js';
+import { egressIP, netLog, netLogTail, networkReport } from './network.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
@@ -119,32 +120,21 @@ function chatOptsFrom(body) {
   };
 }
 
-// ── egress IP (proves outbound = this machine / user's IP) ──
-async function egressIP() {
-  const endpoints = [
-    'https://api.ipify.org?format=json',
-    'https://icanhazip.com/',
-    'https://checkip.amazonaws.com/',
-  ];
-  for (const url of endpoints) {
-    try {
-      const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), 5000);
-      const r = await fetch(url, { signal: ctl.signal });
-      clearTimeout(t);
-      if (!r.ok) continue;
-      const text = (await r.text()).trim();
-      try {
-        const j = JSON.parse(text);
-        if (j.ip) return { ip: j.ip, via: url };
-      } catch {
-        if (/^\d{1,3}(\.\d{1,3}){3}$|:/.test(text)) return { ip: text, via: url };
-      }
-    } catch {
-      /* try next */
-    }
+/**
+ * Python parity: data-mode multi-turn.
+ * - default: KEEP provider history (like up.chat(data=…))
+ * - body.reset=true → new_session first
+ * - body.messages[] → messages mode (replaces history inside stream)
+ * - body.fresh=true → clear history only (one-shot like old behavior)
+ */
+function prepareTurn(up, body) {
+  if (body.reset) {
+    up.newSession();
+    netLog('session-reset', { via: 'reset flag' });
+  } else if (body.fresh && !body.messages) {
+    up.clearHistory();
   }
-  return { ip: null, via: null, error: 'egress probe unreachable' };
+  // else: multi-turn — stream() appends user turn, history grows like Python
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -218,7 +208,16 @@ async function handle(req, res) {
   }
 
   if (p === '/api/ip' && req.method === 'GET') {
-    sendJSON(res, 200, await egressIP());
+    sendJSON(res, 200, await egressIP({ force: url.searchParams.get('force') === '1' }));
+    return;
+  }
+
+  // ── network log: real IP + path, NO credential connect ──
+  if (p === '/api/network' && (req.method === 'GET' || isHead)) {
+    const report = await networkReport({
+      force: url.searchParams.get('force') === '1',
+    });
+    sendJSON(res, 200, report, isHead);
     return;
   }
 
@@ -234,12 +233,15 @@ async function handle(req, res) {
 
   if (p === '/api/status' && req.method === 'GET') {
     const up = providerFor(sess);
+    // cheap status: only verify if we already have an action token; never auto-capture
     let token = null;
     let error = null;
-    try {
-      token = await up._creds.verify();
-    } catch (e) {
-      error = String(e.message || e);
+    if (up._creds.actionToken) {
+      try {
+        token = await up._creds.verify();
+      } catch (e) {
+        error = String(e.message || e);
+      }
     }
     sendJSON(res, 200, {
       connected: Boolean(token),
@@ -256,6 +258,8 @@ async function handle(req, res) {
       console: consoleUrl(),
       api_base: apiBase(),
       usage: up.session_usage.totals(),
+      last_usage: up.last_usage ? up.last_usage.to_dict() : null,
+      network_log: netLogTail(30),
     });
     return;
   }
@@ -270,12 +274,14 @@ async function handle(req, res) {
         csrf_valid: Boolean(token),
         action_token: up._creds.actionToken,
         session_id: up._creds.sessionId,
+        network_log: netLogTail(30),
       });
     } catch (e) {
       sendJSON(res, 502, {
         ok: false,
         error: String(e.message || e),
         hint: 'Real console.upstage.ai must be reachable from this machine.',
+        network_log: netLogTail(30),
       });
     }
     return;
@@ -301,7 +307,7 @@ async function handle(req, res) {
   if (p === '/api/chat' && req.method === 'POST') {
     const body = await readJSON(req);
     const up = providerFor(sess);
-    up.clearHistory(); // stateless JSON mode unless messages[] provided
+    prepareTurn(up, body);
     try {
       for await (const _ of up.chat(chatOptsFrom(body))) {
         /* drain */
@@ -314,6 +320,8 @@ async function handle(req, res) {
         sources: up.last_sources,
         sources_text: up.last_sources_text,
         usage: up.last_usage ? up.last_usage.to_dict() : null,
+        usage_line: up.last_usage ? up.last_usage.formatLine() : null,
+        history: up.history,
         history_roles: up.history.map((m) => m.role),
       });
     } catch (e) {
@@ -322,6 +330,7 @@ async function handle(req, res) {
         ok: false,
         error: String(e.message || e),
         type: e.constructor.name,
+        network_log: netLogTail(20),
       });
     }
     return;
@@ -330,7 +339,7 @@ async function handle(req, res) {
   if (p === '/api/chat/stream' && req.method === 'POST') {
     const body = await readJSON(req);
     const up = providerFor(sess);
-    up.clearHistory();
+    prepareTurn(up, body);
 
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
@@ -348,13 +357,23 @@ async function handle(req, res) {
       for await (const ev of up.stream(chatOptsFrom(body))) {
         send(ev.kind, ev);
       }
-      if (up.last_usage) send('usage', up.last_usage.to_dict());
-      send('eof', { ok: true });
+      if (up.last_usage) {
+        send('usage', {
+          ...up.last_usage.to_dict(),
+          format_line: up.last_usage.formatLine(),
+        });
+      }
+      send('eof', {
+        ok: true,
+        history_roles: up.history.map((m) => m.role),
+        turn: up.history.length,
+      });
     } catch (e) {
       send('error', {
         error: String(e.message || e),
         type: e.constructor.name,
         auth: e instanceof UpstageAuthError,
+        network_log: netLogTail(20),
       });
     } finally {
       res.end();
@@ -396,6 +415,10 @@ export function startServer(port = PORT, host = HOST) {
     console.log(`   api      ${apiBase()}`);
     console.log(`   outbound DIRECT from this machine (your public IP)`);
     console.log(`   relay    none — no server IP in the path`);
+
+    // kick off egress-IP probe immediately (network log, NO /connect)
+    netLog('server-start', { port, host: shown });
+    egressIP({ force: true }).catch(() => {});
   });
 
   server.on('error', (err) => {
