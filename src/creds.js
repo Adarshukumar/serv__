@@ -146,9 +146,8 @@ export class Credentials {
       headers: { 'user-agent': UA },
       https: { rejectUnauthorized: true },
       followRedirect: true,
-      // direct socket from this machine — no proxy agent ever
-      agent: undefined,
-      proxy: undefined,
+      // no proxy agent — socket opens from this machine (user IP);
+      // proxy env vars are cleared in config.js at import time
     };
   }
 

@@ -126,9 +126,7 @@ export class UpstageProvider {
       timeout: { request: CONNECT_TIMEOUT, response: STREAM_TIMEOUT },
       throwHttpErrors: false,
       https: { rejectUnauthorized: true },
-      // direct from this machine — never via proxy/relay
-      agent: undefined,
-      proxy: undefined,
+      // direct from this machine — proxy env cleared in config.js
     });
 
     // wait for response headers before reading body
