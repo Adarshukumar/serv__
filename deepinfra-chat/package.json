@@ -1,0 +1,29 @@
+{
+  "name": "novachat-deepinfra",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "NovaChat \u2014 a React/Node chat client that talks to the DeepInfra OpenAI-compatible endpoint with the reverse-engineered browser headers. No Python, no backend server, real user IP.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "selftest": "node scripts/selftest.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "uismoke": "node scripts/uismoke.mjs"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.16",
+    "marked": "^18.0.14",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.1",
+    "jsdom": "^30.1.1",
+    "vite": "^8.3.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
