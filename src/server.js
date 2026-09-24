@@ -38,10 +38,12 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
 const PORT = Number(process.env.PORT || 8486);
 /**
- * Loopback by default: the UI is same-machine only — no LAN/public
- * "server IP" is ever exposed. Outbound to Upstage always opens from
- * this process (the user's IP), independent of this bind address.
- * Set HOST=0.0.0.0 only if you deliberately need remote UI access.
+ * UI bind address.
+ * - Arena preview: HOST=:: with ipv6Only:false → accepts IPv4 + IPv6
+ *   (proxy may dial 127.0.0.1 OR ::1; missing one → Cloudflare 502).
+ * - Local-only default: 127.0.0.1 (no LAN exposure).
+ * Outbound to Upstage always opens from this process (user's IP),
+ * independent of this bind address.
  */
 const HOST = process.env.HOST || '127.0.0.1';
 
@@ -62,14 +64,16 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
 };
 
-function sendJSON(res, status, obj) {
+function sendJSON(res, status, obj, headOnly = false) {
   const body = JSON.stringify(obj);
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
     'access-control-allow-origin': '*',
+    'content-length': Buffer.byteLength(body),
   });
-  res.end(body);
+  if (headOnly) res.end();
+  else res.end(body);
 }
 
 function readBody(req) {
@@ -155,33 +159,47 @@ async function handle(req, res) {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'access-control-allow-origin': '*',
-      'access-control-allow-methods': 'GET,POST,OPTIONS',
+      'access-control-allow-methods': 'GET,POST,HEAD,OPTIONS',
       'access-control-allow-headers': 'content-type,x-session-key',
     });
     res.end();
     return;
   }
 
+  // HEAD: same headers as GET, empty body (proxy health checks)
+  const isHead = req.method === 'HEAD';
+
   // ── static UI ──
-  if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
+  if ((req.method === 'GET' || isHead) && (p === '/' || p === '/index.html')) {
     const file = path.join(PUBLIC_DIR, 'index.html');
-    res.writeHead(200, { 'content-type': MIME['.html'], 'cache-control': 'no-store' });
-    fs.createReadStream(file).pipe(res);
+    const stat = fs.statSync(file);
+    res.writeHead(200, {
+      'content-type': MIME['.html'],
+      'cache-control': 'no-store',
+      'content-length': stat.size,
+    });
+    if (isHead) res.end();
+    else fs.createReadStream(file).pipe(res);
     return;
   }
-  if (req.method === 'GET' && p.startsWith('/public/')) {
+  if ((req.method === 'GET' || isHead) && p.startsWith('/public/')) {
     const rel = path.normalize(p.slice('/public/'.length)).replace(/^(\.\.[/\\])+/, '');
     const file = path.join(PUBLIC_DIR, rel);
     if (file.startsWith(PUBLIC_DIR) && fs.existsSync(file)) {
       const ext = path.extname(file);
-      res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream' });
-      fs.createReadStream(file).pipe(res);
+      const stat = fs.statSync(file);
+      res.writeHead(200, {
+        'content-type': MIME[ext] || 'application/octet-stream',
+        'content-length': stat.size,
+      });
+      if (isHead) res.end();
+      else fs.createReadStream(file).pipe(res);
       return;
     }
   }
 
   // ── API ──
-  if (p === '/api/health' && req.method === 'GET') {
+  if (p === '/api/health' && (req.method === 'GET' || isHead)) {
     sendJSON(res, 200, {
       ok: true,
       service: 'upstage-solar-npm',
@@ -190,12 +208,12 @@ async function handle(req, res) {
       node: process.version,
       pid: process.pid,
       topology: {
-        ui_bind: 'loopback (same machine)',
+        ui_bind: 'dual-stack loopback/LAN (same machine)',
         outbound: 'direct from this process = user public IP',
         relay: 'none',
         proxy: 'none',
       },
-    });
+    }, isHead);
     return;
   }
 
@@ -204,13 +222,13 @@ async function handle(req, res) {
     return;
   }
 
-  if (p === '/api/models' && req.method === 'GET') {
+  if (p === '/api/models' && (req.method === 'GET' || isHead)) {
     const up = providerFor(sess);
     sendJSON(res, 200, {
       models: up.listModels(),
       info: UpstageProvider.modelInfo(),
       active: up.model,
-    });
+    }, isHead);
     return;
   }
 
@@ -349,20 +367,45 @@ async function handle(req, res) {
 
 export function startServer(port = PORT, host = HOST) {
   const server = http.createServer((req, res) => {
+    // log so we can see proxy traffic in process output
+    console.log(`${new Date().toISOString()} ${req.method} ${req.url} host=${req.headers.host || '-'}`);
     handle(req, res).catch((e) => {
       if (!res.headersSent) sendJSON(res, 500, { ok: false, error: String(e.message || e) });
       else res.end();
     });
   });
-  server.listen(port, host, () => {
-    const shown = host === '0.0.0.0' || host === '::' ? 'localhost' : host;
+
+  // SSE can run for minutes — never let Node kill long streams
+  server.requestTimeout = 0;
+  server.headersTimeout = 120_000;
+  server.keepAliveTimeout = 65_000;
+  server.setTimeout(0);
+
+  // dual-stack when HOST is a wildcard / "::" so both 127.0.0.1 and ::1 work
+  const wildcard = host === '0.0.0.0' || host === '::' || host === '';
+  const listenHost = wildcard ? '::' : host;
+  const listenOpts = wildcard
+    ? { port, host: '::', ipv6Only: false }
+    : { port, host: listenHost };
+
+  server.listen(listenOpts, () => {
+    const shown = wildcard ? 'localhost' : host;
     console.log(`☀️  upstage-solar-npm`);
-    console.log(`   UI (loopback only)  http://${shown}:${port}`);
-    console.log(`   console             ${consoleUrl()}`);
-    console.log(`   api                 ${apiBase()}`);
-    console.log(`   outbound            DIRECT from this machine (your public IP)`);
-    console.log(`   relay / proxy       none — no server IP in the path`);
+    console.log(`   UI  http://${shown}:${port}  (dual-stack ${wildcard ? 'IPv4+IPv6' : listenHost})`);
+    console.log(`   console  ${consoleUrl()}`);
+    console.log(`   api      ${apiBase()}`);
+    console.log(`   outbound DIRECT from this machine (your public IP)`);
+    console.log(`   relay    none — no server IP in the path`);
   });
+
+  server.on('error', (err) => {
+    console.error('server error:', err.message);
+    if (err.code === 'EADDRINUSE') {
+      console.error(`port ${port} busy — set PORT=… and retry`);
+      process.exit(1);
+    }
+  });
+
   return server;
 }
 
