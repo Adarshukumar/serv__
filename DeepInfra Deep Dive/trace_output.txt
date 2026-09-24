@@ -1,0 +1,155 @@
+══════════════════════════════════════════════════════════════════════════════
+  🔷 DeepInfra.py — OFFLINE BEHAVIOUR PROBE
+══════════════════════════════════════════════════════════════════════════════
+   module under test                  → My PREVIOUS ENTIRE SERVER/API/providers/DeepInfra.py
+   file size / lines                  → 14988 bytes / 360 lines
+   api endpoint                       → https://api.deepinfra.com/v1/openai/chat/completions
+   spoofed origin                     → https://g4f.dev
+   retry codes                        → [429, 500, 502, 503, 504, 520, 521, 522, 523, 524]
+   fatal codes                        → [400, 401, 403, 404, 405, 422]
+   alias count                        → 18
+   default alias                      → nemotron-3-nano-30b-a3b
+
+╔══ TEST 01  _resolve() — alias → DeepInfra model id
+╚──────────────────────────────────────────────────────────────────────────────
+   None                               → 'nvidia/Nemotron-3-Nano-30B-A3B'
+   ''                                 → 'nvidia/Nemotron-3-Nano-30B-A3B'
+   'kimi-k2.5'                        → 'moonshotai/Kimi-K2.5'
+   'KIMI-K2.5'                        → 'moonshotai/Kimi-K2.5'
+   '  glm-5  '                        → 'zai-org/GLM-5'
+   'glm-5'                            → 'zai-org/GLM-5'
+   'Qwen/Qwen3-Max'                   → 'Qwen/Qwen3-Max'
+   'deepseek-ai/DeepSeek-V3.2'        → 'deepseek-ai/DeepSeek-V3.2'
+   'gpt-4o'                           → 'gpt-4o'
+   'llama-3.1-8b'                     → 'llama-3.1-8b'
+
+╔══ TEST 02  _build_msgs() — message assembly matrix
+╚──────────────────────────────────────────────────────────────────────────────
+   prompt only                        → [{'role': 'system', 'content': 'SYS'}, {'role': 'user', 'content': 'hi'}]
+   messages only                      → [{'role': 'system', 'content': 'SYS'}, {'role': 'user', 'content': 'u'}]
+   system= override                   → [{'role': 'system', 'content': 'NEW'}, {'role': 'user', 'content': 'hi'}]
+   messages carry system              → [{'role': 'system', 'content': 'MSGSYS'}, {'role': 'user', 'content': 'u'}]
+   system arg + sys in msgs           → [{'role': 'system', 'content': 'NEW'}, {'role': 'user', 'content': 'u'}]
+   two systems in msgs                → [{'role': 'system', 'content': 'S2'}, {'role': 'user', 'content': 'u'}]
+   tool role dropped                  → [{'role': 'system', 'content': 'SYS'}, {'role': 'user', 'content': 'u'}, {'role': 'assistant', 'content': 'a'}]
+   developer role dropped             → [{'role': 'system', 'content': 'SYS'}]
+
+╔══ TEST 03  _parse_sse() — one line at a time
+╚──────────────────────────────────────────────────────────────────────────────
+   'data: {"choices":[{"delta":{"role":"assistant"},"index":0}' → token='' done=False
+   'data: {"choices":[{"delta":{"content":"Hel"},"index":0}]}' → token='Hel' done=False
+   'data: {"choices":[{"delta":{"reasoning_content":"thinking…' → token='' done=False
+   'data: {"choices":[{"delta":{"tool_calls":[{"id":"x"}]},"in' → token='' done=False
+   'data: {"choices":[],"usage":{"prompt_tokens":9,"completion' → token='' done=False
+   'data: {"choices":[{"delta":{"content":""},"index":0}]}' → token='' done=False
+   'data: [DONE]'                     → token='' done=True
+   ': keep-alive comment'             → token='' done=False
+   'event: ping'                      → token='' done=False
+   'data: {this is not json}'         → token='' done=False
+   ''                                 → token='' done=False
+
+╔══ TEST 04  happy path: 200 + SSE stream  (what reaches the caller)
+╚──────────────────────────────────────────────────────────────────────────────
+   tokens yielded                     → ['Hello', ' world']
+   tokens joined                      → 'Hello world'
+   posts made                         → 1
+   post kwargs                        → {'url': 'https://api.deepinfra.com/v1/openai/chat/completions', 'stream': True, 'timeout': 120}
+   payload sent                       → {'model': 'zai-org/GLM-5', 'messages': [{'role': 'system', 'content': 'You are a helpful assistant.'}, {'role': 'user', 'content': 'hello'}], 'temperature': 0.7, 'max_tokens': 8192, 'stream': True, 'stream_options': {'include_usage': True}}
+   note                               → reasoning_content + usage chunks never surfaced
+
+╔══ TEST 05  `stream=False` argument — is it honoured?
+╚──────────────────────────────────────────────────────────────────────────────
+   stream=False → payload['stream']   → True
+   verdict                            → parameter accepted, then ignored (hard-coded True)
+
+╔══ TEST 06  429 × 2 then 200 — retry + backoff (sleeps recorded)
+╚──────────────────────────────────────────────────────────────────────────────
+   posts made                         → 3
+   which scraper served each          → [1, 1, 1]
+   sleep waits (s)                    → [2.01, 4.46]
+   scrapers created                   → 1
+   session resets (close calls)       → 0
+   tokens                             → Hello world
+
+╔══ TEST 07  521 then 200 — session reset path
+╚──────────────────────────────────────────────────────────────────────────────
+   sleep waits (s)                    → [2.2]
+   scrapers created (reset → +1)      → 2
+   which scraper served each          → [1, 2]
+   old scrapers closed                → [1, 0]
+   singleton replaced?                → True
+   tokens                             → Hello world
+
+╔══ TEST 08  401 — fatal, no retry
+╚──────────────────────────────────────────────────────────────────────────────
+   raised                             → RuntimeError: Fatal error: HTTP 401: {"error":"unauthorized"}
+   posts made                         → 1
+   sleep waits (s)                    → []
+   note                               → only the FIRST 200 chars of the body are kept in the error
+
+╔══ TEST 09  transport exception — reset + linear backoff
+╚──────────────────────────────────────────────────────────────────────────────
+   raised                             → RuntimeError: Connection failed: connection reset by peer
+   posts made (1 + retries)           → 3
+   sleep waits (s)                    → [2.0, 4.0]
+   scrapers created (one per reset)   → 4
+   note                               → transport path sleeps 2·(n+1); HTTP path sleeps exp+jitter
+
+╔══ TEST 10  retries=0 vs retries=-1  (loop range edge cases)
+╚──────────────────────────────────────────────────────────────────────────────
+   retries=0 + 500                    → RuntimeError: HTTP 500: boom
+   retries=-1 (range(0))              → UnboundLocalError: cannot access local variable 'resp' where it is not associated with a value
+   posts made with retries=-1         → 0
+
+╔══ TEST 11  consumer abandons the stream early — is the socket closed?
+╚──────────────────────────────────────────────────────────────────────────────
+   first token                        → Hello
+   resp.close() calls after gen.close() → 0
+   verdict                            → no try/finally in _stream → response not released
+
+╔══ TEST 12  charset handling — REAL requests.iter_lines() semantics
+╚──────────────────────────────────────────────────────────────────────────────
+   content-type 'text/event-stream; charset=utf-8' → requests.encoding = 'utf-8'
+      token as parsed                 → 'héllo 😀 日本語'
+      correct?                        → True
+   content-type 'text/event-stream'   → requests.encoding = 'ISO-8859-1'
+      token as parsed                 → 'hÃ©llo ð\x9f\x98\x80 æ\x97¥æ\x9c¬èª\x9e'
+      correct?                        → False
+
+╔══ TEST 13  does a retry stall the asyncio event loop?  (real sleeps, real loop)
+╚──────────────────────────────────────────────────────────────────────────────
+   ticks before the call              → 3
+   ticks after the call               → 3
+   largest inter-tick gap (s)         → 2.319
+   silence after last pre-call tick   → 2.319 s
+   verdict                            → one 429 retry freezes the whole event loop for seconds
+
+╔══ TEST 14  ModelRegistry wiring — is DeepInfra routable at all?
+╚──────────────────────────────────────────────────────────────────────────────
+   registered models                  → 64
+   models with provider 'DeepInfra'   → []
+   providers actually referenced      → ['DevsDo', 'Dolphin', 'LLMChat', 'Mercury', 'Upstage', 'mCloudFlare']
+   alias names colliding with registry → ['glm-4.7-flash', 'kimi-k2.5']
+      registry[glm-4.7-flash]         → providers=['DevsDo', 'LLMChat'] best=DevsDo
+      registry[kimi-k2.5]             → providers=['DevsDo', 'LLMChat'] best=DevsDo
+   router outcome                     → get_provider_for_model() can NEVER return 'DeepInfra'
+
+╔══ TEST 15  provider-catalogue deltas (Client.py / Completion.py / Server.py)
+╚──────────────────────────────────────────────────────────────────────────────
+   Client.py spec                     → ProviderSpec("DeepInfra", DeepInfraProvider, async_native=False),
+   Completion async_native set        → async_providers = {"Dolphin", "DevsDo", "Mercury", "LLMChat", "Upstage"}
+   Completion param support           → "DeepInfra": { "data", "messages", "model", "system", "temperature", "max_tokens" }
+   Server default model               → DEFAULT_LOCAL_MODEL  = os.getenv("LOCAL_DEFAULT_MODEL", "kimi-k2.5")
+   has connect()/health()?            → (False, False)
+   close() body                       → pass → singleton survives Client.close_all()
+
+╔══ TEST 16  what /v1/warmup would report about DeepInfra
+╚──────────────────────────────────────────────────────────────────────────────
+   details Client would build         → {'model_count': 18, 'provider': 'DeepInfra', 'ok': True}
+   verdict                            → ok=True purely because no health() exists
+   available_models() (first 5)       → ['step-3.5-flash', 'qwen-3.5-397b-a17b', 'qwen-3.5-122b-a10b', 'qwen-3.5-35b-a3b', 'qwen-3.5-27b']
+   …total aliases                     → 18
+
+══════════════════════════════════════════════════════════════════════════════
+  probe complete — every result above came from the real module
+══════════════════════════════════════════════════════════════════════════════
