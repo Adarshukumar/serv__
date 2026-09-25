@@ -1,207 +1,378 @@
 import {
-  DEFAULT_THINKING,
+  DEFAULT_EFFORT,
   ENDPOINTS,
-  RATE_LIMIT_BACKOFF_MS,
-  RATE_LIMIT_RETRIES,
-  SESSION_HEADER,
-  type ThinkingMode,
+  IDLE_TIMEOUT_MS,
+  RESPONSE_TIMEOUT_MS,
+  RETRY_ATTEMPTS,
+  RETRY_BASE_MS,
+  displayModelName,
+  type ModelInfo,
+  type ReasoningEffort,
 } from './config';
-import { InceptionError, isAbortError, toInceptionError } from './errors';
-import { parseStreamPayload, type StreamEvent } from './events';
-import { challengeError, httpError, isChallengeResponse, sleep, type FetchLike } from './http';
-import { buildChatBody, toWireMessages, type ChatTurn } from './messages';
-import type { SessionManager } from './session';
+import { abortedError, InceptionError, type InceptionErrorKind } from './errors';
+import { parseChunk, type StreamEvent, type StreamMode } from './events';
+import {
+  defaultMessage,
+  discard,
+  errorFromResponse,
+  hostOf,
+  isRetryableStatus,
+  kindForStatus,
+  linkedController,
+  retryDelay,
+  sleep,
+  type FetchLike,
+} from './http';
+import { buildChatRequest, buildFollowUpsRequest, buildHandshakeRequest, parseFollowUps, toApiMessages, type ChatTurn } from './messages';
 import { SSEDecoder } from './sse';
 
-export interface ChatOptions {
-  /** Conversation id (the web app sends one per chat). */
-  chatId: string;
-  /** Full history, ending with the new user turn. */
-  turns: readonly ChatTurn[];
-  thinking?: ThinkingMode;
-  webSearch?: boolean;
-  /** Optional custom instructions, prepended to the first user turn. */
-  system?: string;
-  timezone?: string;
-  signal?: AbortSignal;
-}
-
 export interface RetryInfo {
-  reason: 'rate-limit' | 'auth';
   attempt: number;
+  of: number;
   delayMs: number;
+  kind: InceptionErrorKind;
+  status?: number;
 }
 
 export interface ClientOptions {
-  baseUrl: string;
-  session: SessionManager;
-  /** Returns the current transport; read on every request so it can be swapped live. */
-  getFetch: () => FetchLike;
+  /** e.g. https://api.inceptionlabs.ai */
+  apiUrl: string;
+  /** Read on every request, so a new key applies immediately. */
+  getKey: () => string | null;
+  fetch?: FetchLike;
   onRetry?: (info: RetryInfo) => void;
-  /** Base delay for 429 retries (the web app uses 1.5 s, then 3 s). */
-  rateLimitBackoffMs?: number;
+  retryAttempts?: number;
+  retryBaseMs?: number;
+  responseTimeoutMs?: number;
+  idleTimeoutMs?: number;
 }
 
+export interface ChatOptions {
+  model: string;
+  /** Full history, ending with the new user turn. */
+  turns: readonly ChatTurn[];
+  /** Custom instructions, sent as the system message. */
+  system?: string;
+  effort?: ReasoningEffort;
+  diffusing?: boolean;
+  maxTokens: number;
+  reasoningSummary?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface Handshake {
+  latencyMs: number;
+  model: string;
+}
+
+interface SendOptions {
+  method: 'GET' | 'POST';
+  body?: string;
+  accept: string;
+  /** "none": don't send the key (public endpoints — also avoids a CORS preflight). */
+  auth?: 'required' | 'none';
+  retries?: number;
+}
+
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
 /**
- * Talks to chat.inceptionlabs.ai the way its own web app does, from whatever
- * browser context runs it. No proxy, no server of our own.
+ * Talks to Inception's official API straight from the browser that runs it.
+ * No proxy and no server of ours: requests leave from the user's own connection.
  */
 export class InceptionClient {
-  private readonly baseUrl: string;
+  readonly apiUrl: string;
 
   constructor(private readonly options: ClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
+    this.apiUrl = options.apiUrl.replace(/\/+$/, '');
+  }
+
+  get host(): string {
+    return hostOf(this.apiUrl);
   }
 
   /**
    * Send the conversation and stream the answer as typed events.
-   *
-   * Retries, in the same spirit as the web app: 429 → wait 1.5 s, 3 s and try again;
-   * 401/403 → re-create the session once and try again. A bot checkpoint throws
-   * `InceptionError('challenge')` so the UI can let the browser pass it.
+   * 429/5xx before the first byte are retried with exponential backoff.
    */
   async *chat(options: ChatOptions): AsyncGenerator<StreamEvent, void, undefined> {
-    const { signal } = options;
-    const messages = toWireMessages(options.turns, options.system);
-    const last = messages[messages.length - 1];
-    if (!last || last.role !== 'user') {
-      throw new InceptionError('protocol', 'There is no user message to send.');
+    const messages = toApiMessages(options.turns, options.system);
+    if (messages[messages.length - 1]?.role !== 'user') {
+      throw new InceptionError('protocol', 'There is no question to send.');
     }
     const body = JSON.stringify(
-      buildChatBody({
-        chatId: options.chatId,
+      buildChatRequest({
+        model: options.model,
         messages,
-        thinking: options.thinking ?? DEFAULT_THINKING,
-        webSearch: options.webSearch ?? true,
-        timezone: options.timezone,
+        effort: options.effort ?? DEFAULT_EFFORT,
+        diffusing: options.diffusing ?? false,
+        maxTokens: options.maxTokens,
+        reasoningSummary: options.reasoningSummary ?? false,
       }),
     );
 
-    let rateRetries = 0;
-    let authRetried = false;
-    for (;;) {
-      throwIfAborted(signal);
-      const token = await this.options.session.ensure();
-      throwIfAborted(signal);
-      const res = await this.post(ENDPOINTS.chat, body, token, signal);
-
-      if (await isChallengeResponse(res)) {
+    const { controller, unlink } = linkedController(options.signal);
+    try {
+      const res = await this.send(ENDPOINTS.chat, { method: 'POST', body, accept: 'text/event-stream' }, controller, options.signal);
+      if (!res.body) {
         discard(res);
-        throw challengeError();
+        throw new InceptionError('protocol', 'Inception returned an empty response.');
       }
-      if (res.status === 429 && rateRetries < RATE_LIMIT_RETRIES) {
-        rateRetries++;
-        const delayMs = (this.options.rateLimitBackoffMs ?? RATE_LIMIT_BACKOFF_MS) * rateRetries;
-        discard(res);
-        this.options.onRetry?.({ reason: 'rate-limit', attempt: rateRetries, delayMs });
-        await sleep(delayMs, signal);
-        continue;
-      }
-      if ((res.status === 401 || res.status === 403) && !authRetried) {
-        authRetried = true;
-        discard(res);
-        this.options.session.invalidate();
-        this.options.onRetry?.({ reason: 'auth', attempt: 1, delayMs: 0 });
-        continue;
-      }
-      if (!res.ok) throw await httpError(res, 'The chat request');
-      if (!res.body) throw new InceptionError('protocol', 'The server returned an empty response.');
-
-      yield* readEventStream(res.body, signal);
-      return;
+      yield* readChatStream(res.body, options.diffusing ? 'replace' : 'append', {
+        signal: options.signal,
+        controller,
+        idleTimeoutMs: this.options.idleTimeoutMs ?? IDLE_TIMEOUT_MS,
+      });
+    } finally {
+      unlink();
     }
   }
 
   /**
-   * Suggested follow-up questions, generated by the server for the finished exchange
-   * (the web app calls this after every answer). Returns [] on any failure.
+   * The start-up handshake: one real, minimal completion (≈15 tokens). A 200 proves
+   * the whole path at once — CORS, key, credit and model.
    */
-  async followUps(turns: readonly ChatTurn[], signal?: AbortSignal): Promise<string[]> {
+  async verify(model: string, signal?: AbortSignal): Promise<Handshake> {
+    const started = now();
+    const { controller, unlink } = linkedController(signal);
     try {
-      const messages = toWireMessages(turns).map(({ role, parts }) => ({ role, parts }));
-      if (messages.length < 2) return [];
-      const token = await this.options.session.ensure();
-      const res = await this.post(ENDPOINTS.followUps, JSON.stringify({ messages }), token, signal);
-      if (!res.ok) {
-        discard(res);
-        return [];
+      const res = await this.send(
+        ENDPOINTS.chat,
+        { method: 'POST', body: JSON.stringify(buildHandshakeRequest(model)), accept: 'application/json', retries: 2 },
+        controller,
+        signal,
+      );
+      const json = (await readJson(res)) as { choices?: unknown; model?: unknown } | null;
+      if (!json || !Array.isArray(json.choices)) {
+        throw new InceptionError('protocol', defaultMessage('protocol'));
       }
-      const json = (await res.json()) as { follow_ups?: unknown };
-      if (!Array.isArray(json.follow_ups)) return [];
-      return json.follow_ups
-        .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
-        .map((s) => s.trim())
-        .slice(0, 5);
-    } catch {
-      return [];
+      return { latencyMs: Math.round(now() - started), model: typeof json.model === 'string' ? json.model : model };
+    } finally {
+      unlink();
     }
   }
 
-  private async post(path: string, body: string, token: string, signal?: AbortSignal): Promise<Response> {
+  /** The live model list (a public endpoint — the key is not sent). */
+  async models(signal?: AbortSignal): Promise<ModelInfo[]> {
+    const { controller, unlink } = linkedController(signal);
     try {
-      return await this.options.getFetch()(this.baseUrl + path, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', [SESSION_HEADER]: token },
-        body,
-        credentials: 'include',
+      const res = await this.send(ENDPOINTS.models, { method: 'GET', accept: 'application/json', auth: 'none', retries: 1 }, controller, signal);
+      const models = parseModels(await readJson(res));
+      if (models.length === 0) throw new InceptionError('protocol', 'The model list was empty.');
+      return models;
+    } finally {
+      unlink();
+    }
+  }
+
+  /** Three follow-up questions written by the model itself. Returns [] on any failure. */
+  async followUps(model: string, turns: readonly ChatTurn[], signal?: AbortSignal): Promise<string[]> {
+    const { controller, unlink } = linkedController(signal);
+    try {
+      const res = await this.send(
+        ENDPOINTS.chat,
+        { method: 'POST', body: JSON.stringify(buildFollowUpsRequest(model, turns)), accept: 'application/json', retries: 0 },
+        controller,
         signal,
-      });
-    } catch (error) {
-      if (signal?.aborted || isAbortError(error)) throw new InceptionError('aborted', 'Request cancelled.', { cause: error });
-      const err = toInceptionError(error, 'network');
-      throw new InceptionError('network', `Could not reach ${hostOf(this.baseUrl)}.`, { cause: error, detail: err.message });
+      );
+      const json = (await readJson(res)) as { choices?: { message?: { content?: unknown } }[] } | null;
+      const content = json?.choices?.[0]?.message?.content;
+      return typeof content === 'string' ? parseFollowUps(content) : [];
+    } catch {
+      return [];
+    } finally {
+      unlink();
+    }
+  }
+
+  private async send(path: string, req: SendOptions, controller: AbortController, userSignal?: AbortSignal): Promise<Response> {
+    const key = req.auth === 'none' ? null : this.options.getKey();
+    if (req.auth !== 'none' && !key) throw new InceptionError('no-key', defaultMessage('no-key'));
+
+    const headers: Record<string, string> = { Accept: req.accept };
+    if (req.body) headers['Content-Type'] = 'application/json';
+    if (key) headers.Authorization = `Bearer ${key}`;
+
+    const retries = req.retries ?? this.options.retryAttempts ?? RETRY_ATTEMPTS;
+    const fetchFn: FetchLike = this.options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+
+    for (let attempt = 1; ; attempt++) {
+      if (userSignal?.aborted) throw abortedError();
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, this.options.responseTimeoutMs ?? RESPONSE_TIMEOUT_MS);
+
+      let res: Response;
+      try {
+        res = await fetchFn(this.apiUrl + path, {
+          method: req.method,
+          headers,
+          body: req.body,
+          signal: controller.signal,
+          credentials: 'omit',
+        });
+      } catch (error) {
+        clearTimeout(timer);
+        if (userSignal?.aborted) throw abortedError(error);
+        if (timedOut) throw new InceptionError('network', `${this.host} didn’t answer in time.`, { cause: error });
+        const err = new InceptionError('network', `Couldn’t reach ${this.host}.`, { cause: error, detail: networkHint() });
+        // One quick retry: transient DNS/TLS/Wi-Fi hiccups are common, real outages aren't.
+        if (attempt === 1 && retries > 0) {
+          const delayMs = retryDelay(1, Math.min(800, this.options.retryBaseMs ?? RETRY_BASE_MS));
+          this.options.onRetry?.({ attempt, of: 1, delayMs, kind: 'network' });
+          await sleep(delayMs, userSignal);
+          continue;
+        }
+        throw err;
+      }
+      clearTimeout(timer);
+
+      if (res.ok) return res;
+      if (isRetryableStatus(res.status) && attempt <= retries) {
+        discard(res);
+        const delayMs = retryDelay(attempt, this.options.retryBaseMs ?? RETRY_BASE_MS);
+        this.options.onRetry?.({ attempt, of: retries, delayMs, kind: kindForStatus(res.status), status: res.status });
+        await sleep(delayMs, userSignal);
+        continue;
+      }
+      throw await errorFromResponse(res);
     }
   }
 }
 
+function networkHint(): string {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'This device is offline.';
+  return 'Check your connection. A firewall, VPN or content blocker can also stop the request.';
+}
+
+async function readJson(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch (error) {
+    throw new InceptionError('protocol', defaultMessage('protocol'), { cause: error });
+  }
+}
+
+function positive(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/** GET /v1/models → chat models, newest first (Mercury 2.5 before Mercury 2). */
+export function parseModels(json: unknown): ModelInfo[] {
+  const data = json && typeof json === 'object' && Array.isArray((json as { data?: unknown }).data) ? (json as { data: unknown[] }).data : [];
+  const out: ModelInfo[] = [];
+  for (const item of data) {
+    if (!item || typeof item !== 'object') continue;
+    const m = item as Record<string, unknown>;
+    const id = typeof m.id === 'string' ? m.id.trim() : '';
+    if (!id || /edit|embed|fim/i.test(id)) continue;
+    const outputs = Array.isArray(m.output_modalities) ? m.output_modalities : ['text'];
+    if (!outputs.includes('text')) continue;
+    const pricing = m.pricing && typeof m.pricing === 'object' ? (m.pricing as Record<string, unknown>) : null;
+    out.push({
+      id,
+      name: displayModelName(typeof m.name === 'string' ? m.name : undefined, id),
+      contextLength: positive(m.context_length),
+      maxOutput: positive(m.max_output_length),
+      pricing: pricing ? { prompt: Number(pricing.prompt) || 0, completion: Number(pricing.completion) || 0 } : undefined,
+    });
+  }
+  return out.sort((a, b) => b.id.localeCompare(a.id, 'en', { numeric: true }));
+}
+
+export interface ReadStreamOptions {
+  signal?: AbortSignal;
+  /** Aborted (with the fetch) when the stream goes idle for too long. */
+  controller?: AbortController;
+  idleTimeoutMs?: number;
+}
+
 /**
- * Decode a UI-message SSE stream into typed events. UTF-8 is decoded in streaming
- * mode so characters split across network chunks survive intact.
+ * Decode the SSE body into typed events. UTF-8 is decoded in streaming mode, so a
+ * character split across network chunks survives intact. A stream that ends with
+ * neither `finish_reason` nor `[DONE]` was cut off, and says so.
  */
-export async function* readEventStream(
+export async function* readChatStream(
   body: ReadableStream<Uint8Array>,
-  signal?: AbortSignal,
+  mode: StreamMode,
+  options: ReadStreamOptions = {},
 ): AsyncGenerator<StreamEvent, void, undefined> {
+  const { signal, controller, idleTimeoutMs } = options;
   const reader = body.getReader();
   const decoder = new TextDecoder('utf-8');
   const sse = new SSEDecoder();
-  /** True once the body reported `done` — then there is nothing left to cancel. */
   let ended = false;
+  let sawDone = false;
+  let sawFinish = false;
+  let sawError = false;
+  let sentMeta = false;
+  let timedOut = false;
+  let idle: ReturnType<typeof setTimeout> | undefined;
+
+  const arm = () => {
+    if (!idleTimeoutMs) return;
+    clearTimeout(idle);
+    idle = setTimeout(() => {
+      timedOut = true;
+      controller?.abort();
+      reader.cancel().catch(() => {});
+    }, idleTimeoutMs);
+  };
   const onAbort = () => {
     reader.cancel().catch(() => {});
   };
   signal?.addEventListener('abort', onAbort, { once: true });
 
+  function* emit(payloads: string[]): Generator<StreamEvent, void, undefined> {
+    for (const payload of payloads) {
+      for (const event of parseChunk(payload, mode)) {
+        if (event.type === 'done') {
+          sawDone = true;
+          return;
+        }
+        if (event.type === 'meta') {
+          if (sentMeta) continue;
+          sentMeta = true;
+        }
+        if (event.type === 'finish') sawFinish = true;
+        if (event.type === 'error') sawError = true;
+        yield event;
+      }
+    }
+  }
+
+  const timeoutError = () => new InceptionError('stream', 'Inception stopped sending — the answer timed out.');
+
   try {
+    arm();
     for (;;) {
       let chunk: ReadableStreamReadResult<Uint8Array>;
       try {
         chunk = await reader.read();
       } catch (error) {
-        if (signal?.aborted || isAbortError(error)) throw new InceptionError('aborted', 'Request cancelled.', { cause: error });
-        // A drop mid-answer is transient (retryable), not a refusal of the route.
+        if (signal?.aborted) throw abortedError(error);
+        if (timedOut) throw timeoutError();
         throw new InceptionError('stream', 'The connection dropped while the answer was streaming.', { cause: error });
       }
-      if (signal?.aborted) throw new InceptionError('aborted', 'Request cancelled.');
+      if (signal?.aborted) throw abortedError();
+      if (timedOut) throw timeoutError();
       if (chunk.done) {
         ended = true;
         break;
       }
-
-      for (const payload of sse.push(decoder.decode(chunk.value, { stream: true }))) {
-        const event = parseStreamPayload(payload);
-        if (!event) continue;
-        if (event.type === 'done') return; // finally{} releases the connection
-        yield event;
-      }
+      arm();
+      yield* emit(sse.push(decoder.decode(chunk.value, { stream: true })));
+      if (sawDone) return; // finally{} releases the connection
     }
 
-    for (const payload of [...sse.push(decoder.decode()), ...sse.flush()]) {
-      const event = parseStreamPayload(payload);
-      if (!event || event.type === 'done') continue;
-      yield event;
+    yield* emit([...sse.push(decoder.decode()), ...sse.flush()]);
+    if (!sawDone && !sawFinish && !sawError) {
+      throw new InceptionError('stream', 'The answer was cut off — the connection closed early.');
     }
   } finally {
+    clearTimeout(idle);
     signal?.removeEventListener('abort', onAbort);
     if (!ended) reader.cancel().catch(() => {});
     try {
@@ -209,21 +380,5 @@ export async function* readEventStream(
     } catch {
       // already released
     }
-  }
-}
-
-function throwIfAborted(signal?: AbortSignal): void {
-  if (signal?.aborted) throw new InceptionError('aborted', 'Request cancelled.');
-}
-
-function discard(res: Response): void {
-  res.body?.cancel().catch(() => {});
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
   }
 }

@@ -4,6 +4,14 @@ export * from './events';
 export * from './http';
 export * from './ids';
 export * from './messages';
-export * from './session';
 export * from './sse';
-export { InceptionClient, readEventStream, type ChatOptions, type ClientOptions, type RetryInfo } from './client';
+export {
+  InceptionClient,
+  parseModels,
+  readChatStream,
+  type ChatOptions,
+  type ClientOptions,
+  type Handshake,
+  type ReadStreamOptions,
+  type RetryInfo,
+} from './client';

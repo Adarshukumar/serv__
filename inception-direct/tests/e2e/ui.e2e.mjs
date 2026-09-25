@@ -1,22 +1,22 @@
 // @ts-check
 /**
- * Browser end-to-end test of the real UI, in a real Chromium, against the local
- * protocol simulator (tests/fixtures/mock-inception.mjs). It drives the page like a
- * person: waits for the session, sends messages, watches tokens stream in, stops a
- * stream, hits errors, reloads, switches themes — and saves screenshots.
+ * Browser end-to-end test of the real website, in a real Chromium, against the local
+ * API simulator (tests/fixtures/mock-inception.mjs) on a *different origin* — so the
+ * browser enforces CORS and sends real preflights, exactly as it does against
+ * api.inceptionlabs.ai. It drives the page like a person: adds a key, streams answers,
+ * switches models and diffusion, stops, hits errors, reloads — and saves screenshots.
+ * Finally it builds the production bundle (strict CSP) and chats through that too.
  *
  *   CHROME_PATH=/path/to/chrome npm run test:e2e
  *
  * Optional: CHROME_ARGS="--flag --flag", HEADLESS=shell|true, SCREENSHOTS=dir
- *
- * The page runs as a normal web page here (headless Chrome can't load extensions),
- * so the simulator enables CORS. Extension-only pieces (host permissions, header
- * rules, site-tab bridge) are covered by tests/extension.test.ts.
  */
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer-core';
-import { createServer } from 'vite';
+import { build, createServer, preview } from 'vite';
 import { startMockInception } from '../fixtures/mock-inception.mjs';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
@@ -43,23 +43,15 @@ async function step(name, fn) {
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function startApp(baseUrl) {
-  process.env.VITE_INCEPTION_BASE_URL = baseUrl;
-  const server = await createServer({
-    root,
-    configFile: `${root}vite.config.ts`,
-    logLevel: 'error',
-    server: { host: '127.0.0.1', port: 0, strictPort: false },
-  });
-  await server.listen();
-  const address = server.httpServer?.address();
-  const port = typeof address === 'object' && address ? address.port : 5173;
-  return { server, url: `http://127.0.0.1:${port}/` };
-}
+const mock = await startMockInception({ blockDelayMs: 22 });
+process.env.VITE_INCEPTION_API_URL = mock.url;
+const dev = await createServer({ root, configFile: `${root}vite.config.ts`, logLevel: 'error', server: { host: '127.0.0.1', port: 0, strictPort: false } });
+await dev.listen();
+const devAddress = dev.httpServer?.address();
+const appUrl = `http://127.0.0.1:${typeof devAddress === 'object' && devAddress ? devAddress.port : 5173}/`;
 
-const mock = await startMockInception({ cors: true, deltaDelayMs: 22 });
-const app = await startApp(mock.url);
 const browser = await puppeteer.launch({
   executablePath: chromePath,
   headless: process.env.HEADLESS === 'shell' ? 'shell' : true,
@@ -75,82 +67,169 @@ page.on('console', (msg) => {
 });
 
 const shot = (name) => page.screenshot({ path: `${shots}/${name}.png` });
-const textOf = (selector) => page.$eval(selector, (el) => el.textContent ?? '');
+const textOf = (selector, p = page) => p.$eval(selector, (el) => el.textContent ?? '');
 const count = (selector) => page.$$eval(selector, (els) => els.length);
-async function ask(text) {
-  await page.click('#composer-input');
-  await page.type('#composer-input', text);
-  await page.keyboard.press('Enter');
-}
-async function waitForAnswers(n, timeout = 30_000) {
-  await page.waitForFunction(
-    (expected) => document.querySelectorAll('.turn--assistant[aria-busy="false"]').length >= expected,
-    { timeout },
-    n,
+const chats = (kind = 'chat') => mock.state.requests.filter((r) => r.kind === kind);
+/** Click the element whose text is exactly `text` (or starts with it, when `prefix`). */
+async function clickText(selector, text, { prefix = false, p = page } = {}) {
+  const ok = await p.$$eval(
+    selector,
+    (els, wanted, byPrefix) => {
+      const el = els.find((e) => {
+        const t = (e.textContent ?? '').trim();
+        return byPrefix ? t.startsWith(wanted) : t === wanted;
+      });
+      if (el) /** @type {HTMLElement} */ (el).click();
+      return Boolean(el);
+    },
+    text,
+    prefix,
   );
+  assert(ok, `no ${selector} with text “${text}”`);
+}
+async function enterKey(key, p = page) {
+  await p.waitForSelector('#api-key');
+  await p.$eval('#api-key', (el) => {
+    /** @type {HTMLInputElement} */ (el).value = '';
+  });
+  await p.click('#api-key', { clickCount: 3 });
+  await p.keyboard.press('Backspace');
+  await p.type('#api-key', key);
+  await p.click('.key-card button[type="submit"]');
+}
+async function ask(text, p = page) {
+  await p.waitForFunction(() => !(/** @type {HTMLTextAreaElement} */ (document.querySelector('#composer-input'))?.disabled));
+  await p.click('#composer-input');
+  await p.type('#composer-input', text);
+  await p.keyboard.press('Enter');
+}
+async function waitForAnswers(n, timeout = 30_000, p = page) {
+  await p.waitForFunction((expected) => document.querySelectorAll('.turn--assistant[aria-busy="false"]').length >= expected, { timeout }, n);
 }
 
-await step('creates the session on start and shows it as live', async () => {
-  await page.goto(app.url, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('.status-pill[data-tone="ok"]', { timeout: 15_000 });
-  assert((await textOf('.status-pill')).includes('Live'), 'status pill should say Live');
+await step('a first visit asks for a key — nothing can be sent without one', async () => {
+  await page.goto(appUrl, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.key-card');
   await page.waitForFunction(() => document.fonts.status === 'loaded');
-  const sessions = mock.state.log.filter((l) => l.path === '/api/session' && l.status === 200);
-  assert(sessions.length >= 1, 'GET /api/session should have been called');
-  await shot('01-masthead');
+  assert((await textOf('.status-pill')).includes('Add key'), 'status pill should ask for a key');
+  assert(await page.$eval('#composer-input', (el) => /** @type {HTMLTextAreaElement} */ (el).disabled), 'composer disabled without a key');
+  assert(chats('handshake').length === 0 && chats().length === 0, 'no completions without a key');
+  assert(mock.state.log.some((l) => l.path === '/v1/models' && l.status === 200), 'public model list loaded');
+  await sleep(300);
+  await shot('01-key-card');
 });
 
-await step('streams a real answer token by token, with thinking and sources', async () => {
+await step('a wrong key is refused by Inception, and the page says so', async () => {
+  // The card must stay put (no unmount/flash) while the key is being checked.
+  await page.evaluate(() => {
+    const card = document.querySelector('.key-card');
+    /** @type {any} */ (window).__cardRemoved = false;
+    new MutationObserver(() => {
+      if (!card?.isConnected) /** @type {any} */ (window).__cardRemoved = true;
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  await enterKey('sk-wrong-key');
+  await page.waitForSelector('.key-card[data-tone="bad"] .key-error', { timeout: 10_000 });
+  assert(!(await page.evaluate(() => /** @type {any} */ (window).__cardRemoved)), 'the key card stayed on screen during the check');
+  assert(await page.$eval('#api-key', (el) => document.activeElement === el), 'the rejected key is focused, ready to be replaced');
+  const error = await textOf('.key-error');
+  assert(error.includes('didn’t accept') && error.includes('invalid_api_key'), `error text: ${error}`);
+  assert((await textOf('.status-pill')).includes('Key rejected'), 'status shows the rejection');
+  await shot('02-key-rejected');
+});
+
+await step('the right key starts the session with one tiny real handshake — through a CORS preflight', async () => {
+  await enterKey('test-key');
+  await page.waitForSelector('.status-pill[data-tone="ok"]', { timeout: 10_000 });
+  assert((await count('.key-card')) === 0, 'key card closes');
+  const handshakes = chats('handshake');
+  assert(handshakes.length >= 1 && handshakes.at(-1)?.maxTokens === 1, 'one-token handshake sent');
+  const preflight = mock.state.log.find((l) => l.method === 'OPTIONS' && l.path === '/v1/chat/completions');
+  assert(preflight?.status === 200, 'the browser sent a CORS preflight and it passed');
+  assert(handshakes.at(-1)?.origin === new URL(appUrl).origin, 'request came from the page’s own origin');
+  const colophon = await textOf('.masthead-colophon');
+  assert(/Live · Mercury 2\.5 · handshake \d+ ms/.test(colophon), `colophon: ${colophon}`);
+  assert((await page.evaluate(() => localStorage.getItem('inception-direct.api-key.v1'))) === 'test-key', 'key remembered on this device');
+  await sleep(300);
+  await shot('03-live');
+});
+
+await step('streams a real answer block by block, with a thinking timer and a reasoning summary', async () => {
   await ask('Why is the sky blue?');
-  await page.waitForSelector('.thinking', { timeout: 10_000 });
+  await page.waitForSelector('.status-line', { timeout: 5_000 });
+  assert((await textOf('.status-line')).startsWith('Thinking'), 'thinking timer while Mercury reasons');
   await page.waitForSelector('.prose .caret', { timeout: 15_000 });
   const early = (await textOf('.prose')).length;
-  await shot('02-streaming');
-  await new Promise((r) => setTimeout(r, 400));
+  await shot('04-streaming');
+  await sleep(350);
   const later = (await textOf('.prose')).length;
   assert(later > early, `text should grow while streaming (${early} → ${later})`);
   await waitForAnswers(1);
-  assert((await count('.prose .caret')) === 0, 'caret should disappear when done');
+  assert((await count('.prose .caret')) === 0, 'caret gone when done');
+  const label = await textOf('.thinking-label');
+  assert(label.startsWith('Thought for') && label.includes('reasoning tokens'), `thinking label: ${label}`);
+  await page.click('.thinking summary');
+  assert((await textOf('.thinking-body')).includes('Weighed what the question asks'), 'reasoning summary shown');
+  const colophon = await textOf('.colophon-meta');
+  assert(/\d+ words · \d+ tokens · [\d,]+ tok\/s · first word/.test(colophon), `colophon: ${colophon}`);
 });
 
 await step('renders the finished answer: markdown, math, code, multi-byte text', async () => {
   const prose = await textOf('.prose');
-  assert(prose.includes('नमस्ते 👋 — café ✓'), 'multi-byte text must arrive intact');
+  assert(prose.includes('नमस्ते 👋 — café ✓'), 'multi-byte text intact');
   assert((await count('.prose h2')) === 1, 'heading rendered');
   assert((await count('.prose .katex')) >= 2, 'inline + display math rendered');
-  assert(prose.includes('prices do not: $5 and $10.'), 'currency must not become math');
+  assert(prose.includes('prices do not: $5 and $10.'), 'currency is not math');
   assert((await textOf('.code-block .code-lang')) === 'python', 'code block labelled');
   assert((await count('.code-block .hljs-keyword')) >= 1, 'code highlighted');
+  await page.$eval('.scroller', (el) => el.scrollTo(0, 0));
+  await shot('05-answer');
 });
 
-await step('keeps every distinct source (3 of 4, one duplicate) and shows follow-ups', async () => {
-  assert((await count('.sources li')) === 3, `expected 3 sources, got ${await count('.sources li')}`);
+await step('follow-ups are written by the model and continue with the full history', async () => {
   await page.waitForSelector('.follow-ups li', { timeout: 10_000 });
   assert((await count('.follow-ups li')) === 3, 'three follow-ups');
-  assert((await textOf('.thinking-label')).startsWith('Thought for'), 'thinking summary shows duration');
-  await page.$eval('.scroller', (el) => el.scrollTo(0, 0));
-  await shot('03-answer');
-});
-
-await step('continues the conversation with full history', async () => {
+  assert(chats('follow-ups').length === 1, 'one structured-output request for them');
   await page.click('.follow-ups li button');
   await waitForAnswers(2);
-  const last = mock.state.chats.at(-1);
-  assert(last?.messages === 3, `second request should carry 3 messages, got ${last?.messages}`);
-  assert(mock.state.chats[0].id === last.id, 'same chat id across turns');
-  assert((await count('.exchange')) === 2, 'two exchanges shown');
+  const last = chats().at(-1);
+  assert(JSON.stringify(last?.roles) === JSON.stringify(['user', 'assistant', 'user']), `history sent: ${JSON.stringify(last?.roles)}`);
 });
 
-await step('honours thinking mode and web search toggles', async () => {
+await step('honours the model, effort and length settings', async () => {
+  await page.click('.topbar-actions .icon-button[aria-label="Settings"]');
+  await page.waitForSelector('.sheet[data-open="true"]');
+  await clickText('.segmented[aria-label="Model"] button', 'Mercury 2');
+  await page.keyboard.press('Escape');
   await page.click('.modes .mode:nth-child(1)'); // Instant
-  await page.click('.toggle'); // web search off
-  await ask('Quick question without search');
+  await ask('Quick one');
   await waitForAnswers(3);
-  const last = mock.state.chats.at(-1);
-  assert(last?.reasoningEffort === 'instant' && last.webSearchEnabled === false, `settings sent: ${JSON.stringify(last)}`);
+  const last = chats().at(-1);
+  assert(last?.model === 'mercury-2' && last.effort === 'instant', `sent: ${JSON.stringify(last)}`);
+  assert(last?.reasoningSummary === false && last.maxTokens === 16384 && last.includeUsage === true, `params: ${JSON.stringify(last)}`);
   const turns = await page.$$('.turn--assistant');
-  const lastTurnThinking = await turns.at(-1)?.$('.thinking');
-  assert(!lastTurnThinking, 'instant mode has no thinking block');
+  assert(!(await turns.at(-1)?.$('.thinking, .thinking-line')), 'instant has no thinking line');
+  assert((await turns.at(-1)?.$eval('.turn-settings', (el) => el.textContent)) === 'Mercury 2 · Instant', 'turn label names model and effort');
+});
+
+await step('diffusion view: the canvas is refined in place, then typeset', async () => {
+  await page.click('.toggle'); // Diffuse on
+  await ask('Show me diffusion #slow'); // slowed down, so the steps can be watched
+  await page.waitForSelector('.canvas .canvas-text', { timeout: 10_000 });
+  const first = await textOf('.canvas-meter');
+  await sleep(500);
+  const second = await textOf('.canvas-meter');
+  const fresh = await count('.canvas-fresh');
+  await shot('06-diffusion');
+  assert(/step \d+/.test(first) && Number(second.match(/\d+/)?.[0]) > Number(first.match(/\d+/)?.[0]), `steps advance: ${first} → ${second}`);
+  assert(fresh >= 1, 'freshly settled words are highlighted');
+  await waitForAnswers(4);
+  assert((await count('.canvas')) === 0, 'canvas replaced by the typeset answer');
+  const colophon = (await page.$$eval('.colophon-meta', (els) => els.at(-1)?.textContent ?? '')) ?? '';
+  assert(/\d+ steps/.test(colophon), `colophon counts steps: ${colophon}`);
+  assert(chats().at(-1)?.diffusing === true, 'diffusing sent');
+  await page.click('.toggle'); // off again
+  await page.click('.modes .mode:nth-child(3)'); // Medium
 });
 
 await step('stops a stream on request and keeps what arrived', async () => {
@@ -161,115 +240,133 @@ await step('stops a stream on request and keeps what arrived', async () => {
     return (turns[turns.length - 1]?.querySelector('.prose')?.textContent?.length ?? 0) > 20;
   });
   await page.click('.send-button--stop');
-  await waitForAnswers(4);
+  await waitForAnswers(5);
   assert((await count('.stopped-mark')) === 1, 'stopped marker shown');
 });
 
-await step('shows stream errors with a retry', async () => {
+await step('shows a stream error with a retry', async () => {
   await ask('Please fail #error');
-  await waitForAnswers(5);
+  await waitForAnswers(6);
   const note = await textOf('.error-note');
   assert(note.includes('Simulated upstream failure'), `error note: ${note}`);
 });
 
-await step('recovers from rate limiting automatically (new conversation)', async () => {
+await step('backs off and recovers from rate limiting on its own', async () => {
   await page.click('.new-chat');
   await page.waitForSelector('.masthead');
-  const before = mock.state.log.filter((l) => l.path === '/api/chat' && l.status === 429).length;
   await ask('Busy server #429');
+  await page.waitForSelector('.status-line--retry', { timeout: 5_000 });
+  assert((await textOf('.status-line--retry')).includes('rate-limiting'), 'backoff explained while waiting');
   await waitForAnswers(1, 40_000);
-  const text = await textOf('.turn--assistant');
-  assert(text.includes('End of the simulated answer.'), 'answer arrives after 429 retries');
-  const limited = mock.state.log.filter((l) => l.path === '/api/chat' && l.status === 429).length - before;
-  assert(limited === 2, `expected two 429s before success, saw ${limited}`);
+  assert((await textOf('.turn--assistant')).includes('End of the simulated answer.'), 'answer arrives after the retries');
+  assert(mock.state.log.filter((l) => l.status === 429).length === 2, 'two 429s absorbed');
 });
 
-await step('persists conversations locally across reloads', async () => {
+await step('persists conversations; the saved key restarts the session on reload', async () => {
+  const before = chats('handshake').length;
   await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.status-pill[data-tone="ok"]', { timeout: 10_000 });
+  assert(chats('handshake').length === before + 1, 'a fresh handshake on start');
   await page.waitForFunction(() => document.querySelectorAll('.list-item').length === 2, { timeout: 10_000 });
-  const titles = await page.$$eval('.list-title', (els) => els.map((el) => el.textContent ?? ''));
-  assert(titles[0] === 'Busy server #429' && titles[1] === 'Why is the sky blue?', `list order: ${JSON.stringify(titles)}`);
   await page.click('.list-item:nth-of-type(2) .list-title');
   await page.waitForSelector('.exchange');
-  assert((await count('.exchange')) === 5, `all exchanges restored, got ${await count('.exchange')}`);
+  assert((await count('.exchange')) === 6, `all exchanges restored, got ${await count('.exchange')}`);
   assert((await count('.error-note')) === 1 && (await count('.stopped-mark')) === 1, 'statuses restored');
-  await page.waitForSelector('.status-pill[data-tone="ok"]');
 });
 
 await step('night theme and settings sheet', async () => {
   await page.$eval('.scroller', (el) => el.scrollTo(0, 0));
   await page.click('.topbar-actions .icon-button[aria-label^="Switch to night"]');
   await page.waitForFunction(() => document.documentElement.dataset.theme === 'night');
-  await new Promise((r) => setTimeout(r, 350));
-  await shot('04-night');
+  await sleep(350);
+  await shot('07-night');
   await page.click('.topbar-actions .icon-button[aria-label="Settings"]');
   await page.waitForSelector('.sheet[data-open="true"]');
-  await new Promise((r) => setTimeout(r, 400));
-  await shot('05-settings');
+  await sleep(400);
+  await shot('08-settings');
+  const facts = await textOf('.facts');
+  assert(facts.includes('test…') || facts.includes('••••'), `masked key shown: ${facts}`);
   await page.keyboard.press('Escape');
   await page.click('.topbar-actions .icon-button[aria-label^="Switch to paper"]');
 });
 
 await step('mobile layout', async () => {
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 2 });
-  await new Promise((r) => setTimeout(r, 300));
-  await shot('06-mobile');
+  await sleep(300);
+  await shot('09-mobile');
   await page.click('.menu-button');
   await page.waitForSelector('.sidebar[data-open="true"]');
-  await new Promise((r) => setTimeout(r, 350));
-  await shot('07-mobile-sidebar');
+  await sleep(350);
+  await shot('10-mobile-sidebar');
+  await page.click('.sidebar-close');
   await page.setViewport({ width: 1440, height: 940, deviceScaleFactor: 1 });
 });
 
-await step('explains the security checkpoint', async () => {
-  mock.setChallenge(true);
-  try {
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('.notice[data-tone="wait"]', { timeout: 10_000 });
-    assert((await textOf('.status-pill')).includes('Security check'), 'status shows security check');
-    await shot('08-checkpoint');
-  } finally {
-    mock.setChallenge(false);
-  }
+await step('an account without credit is explained, with the ways out', async () => {
+  await page.evaluate(() => localStorage.setItem('inception-direct.api-key.v1', 'broke-key'));
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('.notice[data-tone="bad"]', { timeout: 10_000 });
+  assert((await textOf('.notice-title')).includes('needs credit'), 'billing notice');
+  assert((await textOf('.status-pill')).includes('No credit'), 'status: no credit');
+  await sleep(250);
+  await shot('11-billing');
+  await clickText('.notice-actions .button', 'Use another key', { prefix: true });
+  await enterKey('test-key');
+  await page.waitForSelector('.status-pill[data-tone="ok"]', { timeout: 10_000 });
 });
 
-await step('no errors were logged by the page', async () => {
+await step('forgetting the key returns to the key card', async () => {
+  await page.click('.topbar-actions .icon-button[aria-label="Settings"]');
+  await page.waitForSelector('.sheet[data-open="true"]');
+  await clickText('.sheet .button', 'Forget key', { prefix: true });
+  await clickText('.sheet .button', 'Forget it');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.key-card');
+  assert((await page.evaluate(() => localStorage.getItem('inception-direct.api-key.v1'))) === null, 'key erased');
+  assert((await textOf('.status-pill')).includes('Add key'), 'status back to “Add key”');
+});
+
+await step('no unexpected errors were logged by the page', async () => {
+  // 401/402/429 responses are part of the script above; the browser logs them as failed loads.
   const unexpected = pageErrors.filter((e) => !/status of 4\d\d|Failed to load resource/.test(e));
   assert(unexpected.length === 0, `page errors:\n${unexpected.join('\n')}`);
 });
 
-// A second instance pointed at the real site: a plain web page can't reach it (CORS).
-const real = await startApp('https://chat.inceptionlabs.ai');
-await step('as a plain web page, the real site is blocked and the page explains why', async () => {
-  const p = await browser.newPage();
-  await p.setViewport({ width: 1440, height: 940 });
-  await p.goto(real.url, { waitUntil: 'domcontentloaded' });
-  await p.waitForSelector('.notice[data-tone="muted"]', { timeout: 20_000 });
-  const text = await p.$eval('.notice', (el) => el.textContent ?? '');
-  assert(text.includes('Load unpacked'), 'install instructions shown');
-
-  // With `npm run zip` done, the page's own server offers the ready-built extension.
-  const { version } = JSON.parse(readFileSync(`${root}package.json`, 'utf8'));
-  if (existsSync(`${root}inception-direct-${version}.zip`)) {
-    await p.waitForSelector('a.notice-download[download]', { timeout: 10_000 });
-    const href = await p.$eval('a.notice-download', (el) => /** @type {HTMLAnchorElement} */ (el).href);
-    const res = await fetch(href);
-    assert(res.ok && res.headers.get('content-type') === 'application/zip', `download served: ${res.status} ${res.headers.get('content-type')}`);
-    assert((res.headers.get('content-disposition') ?? '').includes(`inception-direct-${version}.zip`), 'saved under its versioned name');
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    assert(bytes[0] === 0x50 && bytes[1] === 0x4b, 'the download is a zip archive');
-    assert((await p.$eval('a.notice-download', (el) => el.textContent ?? '')).includes('MB'), 'size shown on the button');
-  } else {
-    await new Promise((r) => setTimeout(r, 800));
-    assert((await p.$('a.notice-download')) === null, 'no download button before `npm run zip`');
+await step('production build: strict CSP — and it still streams straight from the API', async () => {
+  const outDir = mkdtempSync(join(tmpdir(), 'inception-direct-dist-'));
+  try {
+    await build({ root, configFile: `${root}vite.config.ts`, logLevel: 'error', build: { outDir, emptyOutDir: true } });
+    const server = await preview({ root, configFile: `${root}vite.config.ts`, logLevel: 'error', build: { outDir }, preview: { host: '127.0.0.1', port: 4391, strictPort: false } });
+    const url = server.resolvedUrls?.local[0] ?? 'http://127.0.0.1:4391/';
+    const p = await browser.newPage();
+    await p.setViewport({ width: 1280, height: 900 });
+    await p.evaluateOnNewDocument(() => {
+      /** @type {any} */ (window).__violations = [];
+      document.addEventListener('securitypolicyviolation', (e) => /** @type {any} */ (window).__violations.push(`${e.violatedDirective} ${e.blockedURI}`));
+    });
+    await p.goto(url, { waitUntil: 'domcontentloaded' });
+    const csp = await p.$eval('meta[http-equiv="Content-Security-Policy"]', (el) => el.getAttribute('content') ?? '');
+    assert(csp.includes(`connect-src 'self' ${new URL(mock.url).origin}`) && csp.includes("script-src 'self'"), `csp: ${csp}`);
+    await p.waitForFunction(() => document.fonts.status === 'loaded');
+    await enterKey('test-key', p);
+    await p.waitForSelector('.status-pill[data-tone="ok"]', { timeout: 10_000 });
+    await ask('Production check', p);
+    await waitForAnswers(1, 30_000, p);
+    assert((await textOf('.prose', p)).includes('End of the simulated answer.'), 'answer streamed in the production build');
+    assert((await p.$$eval('.prose .katex', (els) => els.length)) >= 2, 'maths renders under the CSP');
+    const exfil = await p.evaluate(() => fetch('https://example.com/steal').then(() => 'sent', () => 'blocked'));
+    assert(exfil === 'blocked', 'requests to any other host are blocked by the CSP');
+    const violations = await p.evaluate(() => /** @type {any} */ (window).__violations);
+    assert(violations.length === 1 && violations[0].startsWith('connect-src https://example.com'), `only the deliberate violation: ${JSON.stringify(violations)}`);
+    await p.close();
+    await server.close();
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
   }
-  await p.screenshot({ path: `${shots}/09-web-preview-blocked.png` });
-  await p.close();
 });
 
 await browser.close();
-await app.server.close();
-await real.server.close();
+await dev.close();
 await mock.close();
 
 console.log(`\nBrowser end-to-end (${failures ? 'FAILED' : 'passed'}):\n${results.join('\n')}\n\nScreenshots: ${shots}`);

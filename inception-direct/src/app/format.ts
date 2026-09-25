@@ -22,12 +22,32 @@ export function formatAgo(ts: number | null, now = Date.now()): string {
   return new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
-export function hostOf(url: string): string {
-  try {
-    return new URL(url).host.replace(/^www\./, '');
-  } catch {
-    return url;
-  }
+/** 1234 → "1,234". */
+export function formatCount(n: number): string {
+  return Math.round(n).toLocaleString('en-US');
+}
+
+/** Tokens per second, rounded sensibly: "86 tok/s", "1,240 tok/s". */
+export function formatRate(tokens: number, ms: number): string {
+  if (!(tokens > 0) || !(ms > 0)) return '';
+  const rate = (tokens * 1000) / ms;
+  return `${formatCount(rate >= 100 ? Math.round(rate / 10) * 10 : Math.round(rate))} tok/s`;
+}
+
+/** 16384 → "16K", 65536 → "64K", 4096 → "4K". */
+export function formatTokenLimit(n: number): string {
+  return n >= 1024 ? `${Math.round(n / 1024)}K` : String(n);
+}
+
+/** Context windows are quoted in thousands: 128000 → "128K", 260000 → "260K". */
+export function formatContext(n: number): string {
+  return n >= 1000 ? `${Math.round(n / 1000)}K` : String(n);
+}
+
+/** 0.00000015 $/token → "$0.15 / M". */
+export function formatPerMillion(perToken: number): string {
+  const perMillion = perToken * 1_000_000;
+  return `$${perMillion < 1 ? perMillion.toFixed(2) : perMillion.toFixed(perMillion < 10 ? 2 : 0)} / M`;
 }
 
 export interface ConversationGroup {
@@ -51,12 +71,4 @@ export function groupConversations(list: readonly ConversationMeta[], now = new 
     else groups.set(label, [item]);
   }
   return [...groups.entries()].map(([label, items]) => ({ label, items }));
-}
-
-/** 2680806 → "2.6 MB" (decimal units, like browsers' download bars). */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return '';
-  if (bytes < 1000) return `${Math.round(bytes)} B`;
-  if (bytes < 999_500) return `${Math.round(bytes / 1000)} kB`;
-  return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }

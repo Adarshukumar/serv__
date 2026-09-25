@@ -1,19 +1,20 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { THINKING_LABELS, THINKING_MODES } from '../../core/config';
+import { EFFORT_LABELS, REASONING_EFFORTS } from '../../core/config';
 import { send, stop, store, updateSettings } from '../controller';
 import { useStore } from '../store';
-import { ArrowUpIcon, GlobeIcon, StopIcon } from './Icons';
+import { ArrowUpIcon, DiffuseIcon, StopIcon } from './Icons';
 
 export function Composer() {
   const [text, setText] = useState('');
   const area = useRef<HTMLTextAreaElement>(null);
   const streaming = useStore(store, (s) => s.streamingId !== null);
-  const thinking = useStore(store, (s) => s.settings.thinking);
-  const webSearch = useStore(store, (s) => s.settings.webSearch);
+  const effort = useStore(store, (s) => s.settings.effort);
+  const diffusing = useStore(store, (s) => s.settings.diffusing);
   const status = useStore(store, (s) => s.connection.status);
   const activeId = useStore(store, (s) => s.active?.id ?? null);
-  const blocked = status === 'blocked';
-  const canSend = text.trim().length > 0 && !streaming && !blocked && status !== 'verifying';
+  // Without a usable key there is nothing to send with; everything else may still work.
+  const needsKey = status === 'no-key' || status === 'auth';
+  const canSend = text.trim().length > 0 && !streaming && !needsKey;
 
   // Grow with the text, up to a comfortable height.
   useLayoutEffect(() => {
@@ -24,8 +25,8 @@ export function Composer() {
   }, [text]);
 
   useEffect(() => {
-    area.current?.focus();
-  }, [activeId]);
+    if (!needsKey) area.current?.focus();
+  }, [activeId, needsKey]);
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -47,7 +48,7 @@ export function Composer() {
 
   return (
     <div className="composer-dock">
-      <form className="composer" onSubmit={submit} data-disabled={blocked}>
+      <form className="composer" onSubmit={submit} data-disabled={needsKey}>
         <label htmlFor="composer-input" className="visually-hidden">
           Message Mercury
         </label>
@@ -58,8 +59,8 @@ export function Composer() {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder={blocked ? 'Load the extension to chat — see the note above.' : 'Ask Mercury anything…'}
-          disabled={blocked}
+          placeholder={needsKey ? 'Add your API key above to start.' : 'Ask Mercury anything…'}
+          disabled={needsKey}
           spellCheck
           autoComplete="off"
         />
@@ -67,25 +68,25 @@ export function Composer() {
           <button
             type="button"
             className="toggle"
-            aria-pressed={webSearch}
-            onClick={() => updateSettings({ webSearch: !webSearch })}
-            title={webSearch ? 'Web search is on' : 'Web search is off'}
+            aria-pressed={diffusing}
+            onClick={() => updateSettings({ diffusing: !diffusing })}
+            title={diffusing ? 'Diffusion view is on: watch Mercury denoise its answer' : 'Diffusion view is off: text streams block by block'}
           >
-            <GlobeIcon size={15} />
-            <span>Web</span>
+            <DiffuseIcon size={15} />
+            <span>Diffuse</span>
           </button>
 
-          <div className="modes" role="radiogroup" aria-label="Thinking mode">
-            {THINKING_MODES.map((mode) => (
+          <div className="modes" role="radiogroup" aria-label="Thinking effort">
+            {REASONING_EFFORTS.map((mode) => (
               <button
                 key={mode}
                 type="button"
                 role="radio"
-                aria-checked={thinking === mode}
+                aria-checked={effort === mode}
                 className="mode"
-                onClick={() => updateSettings({ thinking: mode })}
+                onClick={() => updateSettings({ effort: mode })}
               >
-                {THINKING_LABELS[mode]}
+                {EFFORT_LABELS[mode]}
               </button>
             ))}
           </div>

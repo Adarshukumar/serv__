@@ -1,263 +1,304 @@
-import { describe, expect, it } from 'vitest';
-import { InceptionClient } from '../src/core/client';
+import { describe, expect, it, vi } from 'vitest';
+import { InceptionClient, parseModels, type ClientOptions, type RetryInfo } from '../src/core/client';
 import { InceptionError } from '../src/core/errors';
 import type { StreamEvent } from '../src/core/events';
-import { SessionManager } from '../src/core/session';
-import { TOKEN, byteChunks, checkpointResponse, collect, encoder, jsonResponse, mockFetch, sse, streamResponse } from './helpers';
+import {
+  apiErrorResponse,
+  bodyOf,
+  byteChunks,
+  chunk,
+  collect,
+  encoder,
+  headersOf,
+  jsonResponse,
+  mockFetch,
+  sse,
+  streamResponse,
+  usageChunk,
+} from './helpers';
 
-const BASE = 'https://chat.inceptionlabs.ai';
+const API = 'https://api.example.test';
 
-function setup(chat: (init: RequestInit, call: number) => Response | Promise<Response>, options: { tokens?: string[] } = {}) {
-  let sessionCalls = 0;
-  let chatCalls = 0;
-  const tokens = options.tokens ?? [TOKEN];
-  const fetchImpl = mockFetch((url, init) => {
-    if (url.pathname === '/api/session') {
-      const token = tokens[Math.min(sessionCalls, tokens.length - 1)]!;
-      sessionCalls++;
-      return jsonResponse({ ok: true, token });
-    }
-    if (url.pathname === '/api/chat') return chat(init, ++chatCalls);
-    if (url.pathname === '/api/follow-ups') return jsonResponse({ follow_ups: ['What next?', ' And then? ', '', 42] });
-    return new Response('not found', { status: 404 });
-  });
-  const session = new SessionManager({ baseUrl: BASE, fetch: fetchImpl });
-  const retries: unknown[] = [];
-  const client = new InceptionClient({
-    baseUrl: BASE,
-    session,
-    getFetch: () => fetchImpl,
-    rateLimitBackoffMs: 5,
-    onRetry: (info) => retries.push(info),
-  });
-  return { client, fetchImpl, session, retries, counts: () => ({ sessionCalls, chatCalls }) };
+function client(fetch: ClientOptions['fetch'], extra: Partial<ClientOptions> = {}) {
+  return new InceptionClient({ apiUrl: API, getKey: () => 'sk_test', fetch, retryBaseMs: 2, ...extra });
 }
 
-const TURNS = [{ id: 'u1', role: 'user' as const, text: 'Why is the sky blue?' }];
+const turns = [{ role: 'user' as const, text: 'Why is the sky blue?' }];
+const chatOptions = { model: 'mercury-2.5', turns, maxTokens: 16384 };
 
-const FULL_STREAM = [
-  sse({ type: 'start', messageId: 'msg1' }),
-  sse({ type: 'start-step' }),
-  sse({ type: 'reasoning-start', id: 'r0' }),
-  sse({ type: 'reasoning-delta', id: 'r0', delta: 'Rayleigh ' }),
-  sse({ type: 'reasoning-delta', id: 'r0', delta: 'scattering.' }),
-  sse({ type: 'reasoning-end', id: 'r0' }),
-  sse({ type: 'source-url', sourceId: 's0', url: '', title: '__searching__' }),
-  sse({ type: 'source-url', sourceId: 's1', url: 'https://en.wikipedia.org/wiki/Rayleigh_scattering', title: 'Rayleigh scattering' }),
-  sse({ type: 'source-url', sourceId: 's2', url: 'https://www.nasa.gov/sky', title: 'NASA' }),
-  sse({ type: 'source-url', sourceId: 's3', url: 'https://www.weather.gov/sky', title: 'NWS' }),
-  sse({ type: 'text-start', id: 't0' }),
-  sse({ type: 'text-delta', id: 't0', delta: 'Short wavelengths ' }),
-  sse({ type: 'text-delta', id: 't0', delta: 'scatter more. नमस्ते 👋' }),
-  sse({ type: 'text-end', id: 't0' }),
-  sse({ type: 'finish-step' }),
-  sse({ type: 'finish' }),
-  sse('[DONE]'),
-].join('');
+function answerStream(text: string, finish = 'stop'): string {
+  const words = text.match(/\S+\s*/g) ?? [];
+  return [
+    sse(chunk('')),
+    ...words.map((w) => sse(chunk(w))),
+    sse(chunk(null, finish, { reasoning_summary: { content: 'Considered scattering.', status: 'complete' } })),
+    sse(usageChunk(12, 30, 9)),
+    sse('[DONE]'),
+  ].join('');
+}
+
+const textOf = (events: StreamEvent[]) =>
+  events
+    .filter((e): e is Extract<StreamEvent, { type: 'delta' }> => e.type === 'delta')
+    .map((e) => e.text)
+    .join('');
+
+async function failure(promise: Promise<unknown>): Promise<InceptionError> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(InceptionError);
+    return error as InceptionError;
+  }
+  throw new Error('expected a failure');
+}
 
 describe('InceptionClient.chat', () => {
-  it('sends the web app’s request and streams typed events in order', async () => {
-    const { client, fetchImpl } = setup(() => streamResponse([encoder.encode(FULL_STREAM)]));
-    const events = await collect(client.chat({ chatId: 'chat1', turns: TURNS, thinking: 'high', webSearch: true, timezone: 'Asia/Calcutta' }));
+  it('posts the documented request straight to the API, with the key, and streams the answer', async () => {
+    const fetch = mockFetch(() => streamResponse([encoder.encode(answerStream('Rayleigh scattering, mostly.'))]));
+    const events = await collect(client(fetch).chat({ ...chatOptions, system: 'Be brief.', effort: 'high', reasoningSummary: true }));
 
-    const chatCall = fetchImpl.calls.find((c) => c.url.endsWith('/api/chat'))!;
-    expect(chatCall.init.method).toBe('POST');
-    expect(chatCall.init.credentials).toBe('include');
-    expect(chatCall.init.headers).toMatchObject({ 'Content-Type': 'application/json', 'x-session-token': TOKEN });
-    expect(JSON.parse(chatCall.init.body as string)).toEqual({
-      reasoningEffort: 'high',
-      webSearchEnabled: true,
-      voiceMode: false,
-      timezone: 'Asia/Calcutta',
-      id: 'chat1',
-      messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'Why is the sky blue?' }] }],
-      trigger: 'submit-message',
+    expect(fetch.calls).toHaveLength(1);
+    const { url, init } = fetch.calls[0]!;
+    expect(url).toBe(`${API}/v1/chat/completions`);
+    expect(init.method).toBe('POST');
+    expect(init.credentials).toBe('omit');
+    expect(headersOf(init)).toEqual({ accept: 'text/event-stream', 'content-type': 'application/json', authorization: 'Bearer sk_test' });
+    expect(bodyOf(init)).toEqual({
+      model: 'mercury-2.5',
+      messages: [
+        { role: 'system', content: 'Be brief.' },
+        { role: 'user', content: 'Why is the sky blue?' },
+      ],
+      stream: true,
+      stream_options: { include_usage: true },
+      reasoning_effort: 'high',
+      max_completion_tokens: 16384,
+      reasoning_summary: true,
     });
 
-    expect(events).toEqual<StreamEvent[]>([
-      { type: 'start', messageId: 'msg1' },
-      { type: 'reasoning-delta', delta: 'Rayleigh ' },
-      { type: 'reasoning-delta', delta: 'scattering.' },
-      { type: 'searching' },
-      { type: 'source', source: { id: 's1', url: 'https://en.wikipedia.org/wiki/Rayleigh_scattering', title: 'Rayleigh scattering' } },
-      { type: 'source', source: { id: 's2', url: 'https://www.nasa.gov/sky', title: 'NASA' } },
-      { type: 'source', source: { id: 's3', url: 'https://www.weather.gov/sky', title: 'NWS' } },
-      { type: 'text-delta', delta: 'Short wavelengths ' },
-      { type: 'text-delta', delta: 'scatter more. नमस्ते 👋' },
-      { type: 'finish', finishReason: undefined },
-    ]);
+    expect(textOf(events)).toBe('Rayleigh scattering, mostly.');
+    expect(events.filter((e) => e.type === 'meta')).toHaveLength(1);
+    expect(events).toContainEqual({ type: 'finish', reason: 'stop' });
+    expect(events).toContainEqual({ type: 'reasoning-summary', summary: { content: 'Considered scattering.', status: 'complete' } });
+    expect(events).toContainEqual({ type: 'usage', usage: { promptTokens: 12, completionTokens: 30, totalTokens: 42, reasoningTokens: 9, cachedTokens: 0 } });
   });
 
-  it('keeps multi-byte characters intact when every network chunk is a single byte', async () => {
-    const stream = sse({ type: 'text-delta', id: 't', delta: 'नमस्ते 👋 — café ✓' }) + sse('[DONE]');
-    const { client } = setup(() => streamResponse(byteChunks(stream, 1)));
-    const events = await collect(client.chat({ chatId: 'c', turns: TURNS }));
-    expect(events).toEqual([{ type: 'text-delta', delta: 'नमस्ते 👋 — café ✓' }]);
+  it('survives any chunking: one byte at a time, multi-byte characters split', async () => {
+    const text = 'नमस्ते 👋 — café ✓ and $e^{i\\pi}$';
+    const fetch = mockFetch(() => streamResponse(byteChunks(answerStream(text), 1)));
+    expect(textOf(await collect(client(fetch).chat(chatOptions)))).toBe(text);
   });
 
-  it('streams incrementally (events arrive before the response finishes)', async () => {
-    const chunks = [
-      encoder.encode(sse({ type: 'text-delta', id: 't', delta: 'one ' })),
-      encoder.encode(sse({ type: 'text-delta', id: 't', delta: 'two' })),
-      encoder.encode(sse('[DONE]')),
-    ];
-    const { client } = setup(() => streamResponse(chunks, undefined, { delayMs: 30 }));
-    const started = Date.now();
-    const seenAt: number[] = [];
-    for await (const event of client.chat({ chatId: 'c', turns: TURNS })) {
-      if (event.type === 'text-delta') seenAt.push(Date.now() - started);
-    }
-    expect(seenAt).toHaveLength(2);
-    expect(seenAt[1]! - seenAt[0]!).toBeGreaterThanOrEqual(20);
+  it('diffusing: every chunk is the whole canvas', async () => {
+    const body = [sse(chunk('Tqe skq is blze')), sse(chunk('The sky is blze')), sse(chunk('The sky is blue.')), sse(chunk(null, 'stop')), sse('[DONE]')].join('');
+    const fetch = mockFetch(() => streamResponse([encoder.encode(body)]));
+    const events = await collect(client(fetch).chat({ ...chatOptions, diffusing: true }));
+    expect(bodyOf(fetch.calls[0]!.init).diffusing).toBe(true);
+    expect(events.filter((e) => e.type === 'canvas').map((e) => (e as { text: string }).text)).toEqual(['Tqe skq is blze', 'The sky is blze', 'The sky is blue.']);
   });
 
-  it('surfaces error events from the stream', async () => {
-    const stream = sse({ type: 'text-delta', id: 't', delta: 'Partial' }) + sse({ type: 'error', errorText: 'Upstream model error' }) + sse('[DONE]');
-    const { client } = setup(() => streamResponse([encoder.encode(stream)]));
-    const events = await collect(client.chat({ chatId: 'c', turns: TURNS }));
-    expect(events).toEqual([
-      { type: 'text-delta', delta: 'Partial' },
-      { type: 'error', message: 'Upstream model error' },
-    ]);
-  });
-
-  it('retries 429 with backoff, like the web app', async () => {
-    const { client, retries, counts } = setup((_, call) =>
-      call < 3 ? jsonResponse({ error: 'slow down' }, 429) : streamResponse([encoder.encode(sse({ type: 'text-delta', delta: 'ok' }) + sse('[DONE]'))]),
+  it('retries 429 and 503 with backoff, then streams', async () => {
+    const retries: RetryInfo[] = [];
+    const fetch = mockFetch((_, __, call) =>
+      call === 1
+        ? apiErrorResponse(429, 'Rate limit exceeded. Please try again later.', 'rate_limit_reached', 'rate_limit_error')
+        : call === 2
+          ? apiErrorResponse(503, 'Engine overloaded', 'engine_overloaded', 'server_error')
+          : streamResponse([encoder.encode(answerStream('ok'))]),
     );
-    const events = await collect(client.chat({ chatId: 'c', turns: TURNS }));
-    expect(events).toEqual([{ type: 'text-delta', delta: 'ok' }]);
-    expect(counts().chatCalls).toBe(3);
-    expect(retries).toEqual([
-      { reason: 'rate-limit', attempt: 1, delayMs: 5 },
-      { reason: 'rate-limit', attempt: 2, delayMs: 10 },
+    const events = await collect(client(fetch, { onRetry: (info) => retries.push(info) }).chat(chatOptions));
+    expect(textOf(events)).toBe('ok');
+    expect(fetch.calls).toHaveLength(3);
+    expect(retries.map((r) => [r.attempt, r.kind, r.status])).toEqual([
+      [1, 'rate-limit', 429],
+      [2, 'overloaded', 503],
     ]);
   });
 
-  it('gives up with a rate-limit error after the retries', async () => {
-    const { client, counts } = setup(() => jsonResponse({ error: 'slow down' }, 429));
-    const error = (await collect(client.chat({ chatId: 'c', turns: TURNS })).catch((e: unknown) => e)) as InceptionError;
-    expect(error.kind).toBe('rate-limit');
-    expect(counts().chatCalls).toBe(3);
+  it('gives up after the retry budget with a rate-limit error', async () => {
+    const fetch = mockFetch(() => apiErrorResponse(429, 'Rate limit exceeded. Please try again later.', 'rate_limit_reached', 'rate_limit_error'));
+    const err = await failure(collect(client(fetch, { retryAttempts: 2 }).chat(chatOptions)));
+    expect(err.kind).toBe('rate-limit');
+    expect(err.retryable).toBe(true);
+    expect(fetch.calls).toHaveLength(3);
   });
 
-  it('re-creates the session once on 401 and retries with the new token', async () => {
-    const seenTokens: string[] = [];
-    const { client, counts } = setup(
-      (init, call) => {
-        seenTokens.push((init.headers as Record<string, string>)['x-session-token']!);
-        return call === 1 ? jsonResponse({ error: 'expired' }, 401) : streamResponse([encoder.encode(sse({ type: 'text-delta', delta: 'fresh' }) + sse('[DONE]'))]);
-      },
-      { tokens: ['first-token-aaaa', 'second-token-bbbb'] },
-    );
-    const events = await collect(client.chat({ chatId: 'c', turns: TURNS }));
-    expect(events).toEqual([{ type: 'text-delta', delta: 'fresh' }]);
-    expect(seenTokens).toEqual(['first-token-aaaa', 'second-token-bbbb']);
-    expect(counts().sessionCalls).toBe(2);
+  it.each([
+    [401, 'Incorrect API key provided', 'invalid_api_key', 'auth'],
+    [402, 'Account is inactive', 'account_error', 'billing'],
+    [404, 'model `jupyter-2` not found', 'model_not_found', 'model'],
+  ] as const)('%i is final (no retry) → %s', async (status, message, code, kind) => {
+    const fetch = mockFetch(() => apiErrorResponse(status, message, code));
+    const err = await failure(collect(client(fetch).chat(chatOptions)));
+    expect(err.kind).toBe(kind);
+    expect(err.status).toBe(status);
+    expect(err.code).toBe(code);
+    expect(err.detail).toContain(message);
+    expect(fetch.calls).toHaveLength(1);
   });
 
-  it('reports auth failure when the retry is refused too', async () => {
-    const { client } = setup(() => jsonResponse({ error: 'forbidden' }, 403));
-    const error = (await collect(client.chat({ chatId: 'c', turns: TURNS })).catch((e: unknown) => e)) as InceptionError;
-    expect(error.kind).toBe('auth');
-    expect(error.status).toBe(403);
+  it('400 carries the API’s own explanation as the message', async () => {
+    const msg = 'You exceeded the maximum context length for this model of 128000. Please reduce the length of the messages or completion.';
+    const fetch = mockFetch(() => apiErrorResponse(400, msg, 'context_length_exceeded'));
+    const err = await failure(collect(client(fetch).chat(chatOptions)));
+    expect(err.kind).toBe('invalid');
+    expect(err.message).toBe(msg);
+    expect(err.code).toBe('context_length_exceeded');
   });
 
-  it('throws a challenge error when the checkpoint answers the chat request', async () => {
-    const { client } = setup(() => checkpointResponse());
-    const error = (await collect(client.chat({ chatId: 'c', turns: TURNS })).catch((e: unknown) => e)) as InceptionError;
-    expect(error).toBeInstanceOf(InceptionError);
-    expect(error.kind).toBe('challenge');
+  it('a network failure is retried once, then reported with a hint', async () => {
+    const fetch = mockFetch(() => Promise.reject(new TypeError('Failed to fetch')));
+    const err = await failure(collect(client(fetch).chat(chatOptions)));
+    expect(err.kind).toBe('network');
+    expect(err.message).toBe('Couldn’t reach api.example.test.');
+    expect(err.detail).toMatch(/connection|offline/i);
+    expect(fetch.calls).toHaveLength(2);
   });
 
-  it('includes the server’s message for other HTTP errors', async () => {
-    const { client } = setup(() => jsonResponse({ error: 'Invalid request body' }, 400));
-    const error = (await collect(client.chat({ chatId: 'c', turns: TURNS })).catch((e: unknown) => e)) as InceptionError;
-    expect(error.kind).toBe('http');
-    expect(error.message).toContain('400');
-    expect(error.message).toContain('Invalid request body');
+  it('needs a key — and sends nothing without one', async () => {
+    const fetch = mockFetch(() => jsonResponse({}));
+    const err = await failure(collect(new InceptionClient({ apiUrl: API, getKey: () => null, fetch }).chat(chatOptions)));
+    expect(err.kind).toBe('no-key');
+    expect(fetch.calls).toHaveLength(0);
   });
 
-  it('stops promptly and cancels the body when aborted mid-stream', async () => {
-    let cancelled = false;
-    const chunks = Array.from({ length: 50 }, (_, i) => encoder.encode(sse({ type: 'text-delta', delta: `w${i} ` })));
-    const { client } = setup(() => streamResponse(chunks, undefined, { delayMs: 10, onCancel: () => (cancelled = true) }));
+  it('refuses to send a conversation that does not end with a question', async () => {
+    const fetch = mockFetch(() => jsonResponse({}));
+    const err = await failure(collect(client(fetch).chat({ ...chatOptions, turns: [{ role: 'assistant', text: 'hi' }] })));
+    expect(err.kind).toBe('protocol');
+    expect(fetch.calls).toHaveLength(0);
+  });
+
+  it('stops promptly when aborted mid-stream and releases the connection', async () => {
+    const onCancel = vi.fn();
+    const frames = Array.from({ length: 50 }, (_, i) => encoder.encode(sse(chunk(`w${i} `))));
+    const fetch = mockFetch(() => streamResponse(frames, undefined, { delayMs: 5, onCancel }));
     const controller = new AbortController();
     const seen: string[] = [];
-    const error = await (async () => {
-      for await (const event of client.chat({ chatId: 'c', turns: TURNS, signal: controller.signal })) {
-        if (event.type === 'text-delta') seen.push(event.delta);
-        if (seen.length === 3) controller.abort();
-      }
-    })().catch((e: unknown) => e);
-    expect((error as InceptionError).kind).toBe('aborted');
-    expect(seen.length).toBeLessThan(6);
-    expect(cancelled).toBe(true);
+    const err = await failure(
+      (async () => {
+        for await (const e of client(fetch).chat({ ...chatOptions, signal: controller.signal })) {
+          if (e.type === 'delta') seen.push(e.text);
+          if (seen.length === 3) controller.abort();
+        }
+      })(),
+    );
+    expect(err.kind).toBe('aborted');
+    expect(seen).toHaveLength(3);
+    expect(onCancel).toHaveBeenCalled();
   });
 
-  it('treats a connection that drops mid-answer as a retryable stream error, keeping what arrived', async () => {
-    let sent = false;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (!sent) {
-          sent = true;
-          controller.enqueue(encoder.encode(sse({ type: 'text-delta', delta: 'Half an ans' })));
-        } else controller.error(new TypeError('network error'));
-      },
-    });
-    const { client } = setup(() => new Response(body, { status: 200 }));
+  it('a connection that drops mid-answer is a stream error (retryable)', async () => {
+    const fetch = mockFetch(() => streamResponse([encoder.encode(sse(chunk('Half ')))], undefined, { failAfter: 1 }));
     const seen: StreamEvent[] = [];
-    const error = await (async () => {
-      for await (const event of client.chat({ chatId: 'c', turns: TURNS })) seen.push(event);
-    })().catch((e: unknown) => e);
-    expect(seen).toEqual([{ type: 'text-delta', delta: 'Half an ans' }]);
-    expect((error as InceptionError).kind).toBe('stream');
+    const err = await failure(
+      (async () => {
+        for await (const e of client(fetch).chat(chatOptions)) seen.push(e);
+      })(),
+    );
+    expect(textOf(seen)).toBe('Half ');
+    expect(err.kind).toBe('stream');
+    expect(err.retryable).toBe(true);
   });
 
-  it('maps fetch failures to a network error', async () => {
-    const fetchImpl = mockFetch((url) => {
-      if (url.pathname === '/api/session') return jsonResponse({ ok: true, token: TOKEN });
-      throw new TypeError('Failed to fetch');
-    });
-    const session = new SessionManager({ baseUrl: BASE, fetch: fetchImpl });
-    const client = new InceptionClient({ baseUrl: BASE, session, getFetch: () => fetchImpl });
-    const error = (await collect(client.chat({ chatId: 'c', turns: TURNS })).catch((e: unknown) => e)) as InceptionError;
-    expect(error.kind).toBe('network');
+  it('a stream that ends without finish_reason or [DONE] was cut off', async () => {
+    const fetch = mockFetch(() => streamResponse([encoder.encode(sse(chunk('Partial answer')))]));
+    const err = await failure(collect(client(fetch).chat(chatOptions)));
+    expect(err.kind).toBe('stream');
+    expect(err.message).toMatch(/cut off/);
   });
 
-  it('refuses to send when the last turn is not from the user', async () => {
-    const { client } = setup(() => streamResponse([]));
-    const error = (await collect(client.chat({ chatId: 'c', turns: [{ role: 'assistant', text: 'hi' }] })).catch((e: unknown) => e)) as InceptionError;
-    expect(error.kind).toBe('protocol');
+  it('an in-stream error is an event, not a cut-off', async () => {
+    const body = sse(chunk('Some ')) + sse({ error: { message: 'Simulated upstream failure', type: 'server_error', code: 'server_error' } });
+    const fetch = mockFetch(() => streamResponse([encoder.encode(body)]));
+    const events = await collect(client(fetch).chat(chatOptions));
+    expect(events).toContainEqual({ type: 'error', message: 'Simulated upstream failure', code: 'server_error' });
+  });
+
+  it('a stream that goes silent times out', async () => {
+    const fetch = mockFetch(() => streamResponse([encoder.encode(sse(chunk('Hello ')))], undefined, { stallAfter: 1 }));
+    const err = await failure(collect(client(fetch, { idleTimeoutMs: 60 }).chat(chatOptions)));
+    expect(err.kind).toBe('stream');
+    expect(err.message).toMatch(/timed out/);
+  });
+
+  it('a request whose headers never arrive times out', async () => {
+    const fetch = mockFetch(
+      (_, init) =>
+        new Promise<Response>((_, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }),
+    );
+    const err = await failure(collect(client(fetch, { responseTimeoutMs: 50 }).chat(chatOptions)));
+    expect(err.kind).toBe('network');
+    expect(err.message).toMatch(/in time/);
   });
 });
 
-describe('InceptionClient.followUps', () => {
-  it('posts the exchange and returns clean suggestions', async () => {
-    const { client, fetchImpl } = setup(() => streamResponse([]));
-    const list = await client.followUps([
+describe('InceptionClient.verify (start-up handshake)', () => {
+  it('sends one tiny real completion and measures the round trip', async () => {
+    const fetch = mockFetch(() =>
+      jsonResponse({ id: 'x', object: 'chat.completion', created: 1, model: 'mercury-2.5', choices: [{ index: 0, finish_reason: 'length', message: { role: 'assistant', content: 'H' } }], usage: {} }),
+    );
+    const result = await client(fetch).verify('mercury-2.5');
+    expect(result.model).toBe('mercury-2.5');
+    expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+    const { init } = fetch.calls[0]!;
+    expect(headersOf(init).accept).toBe('application/json');
+    expect(bodyOf(init)).toMatchObject({ max_completion_tokens: 1, reasoning_effort: 'instant', stream: false });
+  });
+
+  it('reports a rejected key as auth', async () => {
+    const fetch = mockFetch(() => apiErrorResponse(401, 'Incorrect API key provided', 'invalid_api_key', 'authentication_error'));
+    expect((await failure(client(fetch).verify('mercury-2.5'))).kind).toBe('auth');
+  });
+
+  it('treats a non-completion 200 as a protocol error', async () => {
+    const fetch = mockFetch(() => new Response('<html>captive portal</html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+    expect((await failure(client(fetch).verify('mercury-2.5'))).kind).toBe('protocol');
+  });
+});
+
+describe('models and follow-ups', () => {
+  it('lists chat models newest first, without sending the key', async () => {
+    const fetch = mockFetch(() =>
+      jsonResponse({
+        data: [
+          { id: 'mercury-2', name: 'Inception: Mercury 2', context_length: 128000, max_output_length: 50000, pricing: { prompt: '0.00000025', completion: '0.00000075' }, output_modalities: ['text'] },
+          { id: 'mercury-edit-2', name: 'Inception: Mercury Edit 2', output_modalities: ['text'] },
+          { id: 'mercury-2.5', name: 'Inception: Mercury 2.5', context_length: 260000, max_output_length: 65536, pricing: { prompt: '0.00000004', completion: '0.00000015' } },
+        ],
+      }),
+    );
+    const models = await client(fetch).models();
+    expect(models.map((m) => [m.id, m.name])).toEqual([
+      ['mercury-2.5', 'Mercury 2.5'],
+      ['mercury-2', 'Mercury 2'],
+    ]);
+    expect(models[0]).toMatchObject({ contextLength: 260000, maxOutput: 65536, pricing: { prompt: 0.00000004, completion: 0.00000015 } });
+    expect(fetch.calls[0]!.url).toBe(`${API}/v1/models`);
+    expect(headersOf(fetch.calls[0]!.init).authorization).toBeUndefined();
+  });
+
+  it('an empty or broken list is an error (the app keeps its built-in list)', async () => {
+    await failure(client(mockFetch(() => jsonResponse({ data: [] }))).models());
+    expect(parseModels({ nope: true })).toEqual([]);
+  });
+
+  it('follow-ups come from a structured-output request; failures give []', async () => {
+    const fetch = mockFetch(() =>
+      jsonResponse({ choices: [{ index: 0, message: { role: 'assistant', content: '{"follow_ups":["What about Mars?","Why red at sunset?","Same on the Moon?"]}' }, finish_reason: 'stop' }] }),
+    );
+    const list = await client(fetch).followUps('mercury-2.5', [
       { role: 'user', text: 'Q' },
       { role: 'assistant', text: 'A' },
     ]);
-    expect(list).toEqual(['What next?', 'And then?']);
-    const call = fetchImpl.calls.find((c) => c.url.endsWith('/api/follow-ups'))!;
-    expect(JSON.parse(call.init.body as string)).toEqual({
-      messages: [
-        { role: 'user', parts: [{ type: 'text', text: 'Q' }] },
-        { role: 'assistant', parts: [{ type: 'text', text: 'A', state: 'done' }] },
-      ],
-    });
-  });
+    expect(list).toEqual(['What about Mars?', 'Why red at sunset?', 'Same on the Moon?']);
+    expect((bodyOf(fetch.calls[0]!.init).response_format as { type: string }).type).toBe('json_schema');
 
-  it('returns [] on failure', async () => {
-    const fetchImpl = mockFetch((url) => (url.pathname === '/api/session' ? jsonResponse({ ok: true, token: TOKEN }) : jsonResponse({}, 500)));
-    const session = new SessionManager({ baseUrl: BASE, fetch: fetchImpl });
-    const client = new InceptionClient({ baseUrl: BASE, session, getFetch: () => fetchImpl });
-    await expect(
-      client.followUps([
-        { role: 'user', text: 'Q' },
-        { role: 'assistant', text: 'A' },
-      ]),
-    ).resolves.toEqual([]);
+    const broken = mockFetch(() => apiErrorResponse(500, 'boom', 'server_error', 'server_error'));
+    expect(await client(broken).followUps('mercury-2.5', [{ role: 'user', text: 'Q' }])).toEqual([]);
+    expect(broken.calls).toHaveLength(1); // no retries for a nice-to-have
   });
 });

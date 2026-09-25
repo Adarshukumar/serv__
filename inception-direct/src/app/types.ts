@@ -1,23 +1,28 @@
-import type { InceptionErrorKind, Source, ThinkingMode } from '../core';
-import type { TransportMode } from '../platform/transport';
+import type { InceptionErrorKind, ModelInfo, ReasoningEffort, Usage } from '../core';
 
 export type MessageStatus = 'streaming' | 'done' | 'stopped' | 'error';
 
 export interface AssistantMeta {
-  thinking: ThinkingMode;
-  webSearch: boolean;
-  mode: TransportMode;
+  model: string;
+  effort: ReasoningEffort;
+  diffusing: boolean;
+  /** max_completion_tokens that was sent. */
+  maxTokens?: number;
   startedAt: number;
-  reasoningStartedAt?: number;
-  reasoningEndedAt?: number;
   firstTokenAt?: number;
   finishedAt?: number;
+  finishReason?: string;
+  usage?: Usage;
+  /** Diffusing mode: how many denoising steps arrived. */
+  steps?: number;
+  warning?: string;
 }
 
 export interface MessageError {
   kind: InceptionErrorKind;
   message: string;
   detail?: string;
+  code?: string;
 }
 
 export interface Message {
@@ -26,13 +31,10 @@ export interface Message {
   content: string;
   createdAt: number;
   /* assistant only */
-  reasoning?: string;
-  sources?: Source[];
+  reasoningSummary?: string;
   followUps?: string[];
   status?: MessageStatus;
   error?: MessageError;
-  searching?: boolean;
-  searchFailed?: boolean;
   meta?: AssistantMeta;
 }
 
@@ -53,53 +55,74 @@ export interface ConversationMeta {
 
 export type ThemeChoice = 'paper' | 'night' | 'system';
 export type ReadingFace = 'serif' | 'sans';
-export type TransportChoice = 'auto' | 'direct' | 'bridge';
 
 export interface Settings {
-  thinking: ThinkingMode;
-  webSearch: boolean;
+  model: string;
+  effort: ReasoningEffort;
+  /** Show Mercury's denoising steps while it writes. */
+  diffusing: boolean;
+  /** Ask for a summary of the model's reasoning. */
+  reasoningSummary: boolean;
+  followUps: boolean;
+  lengthLimit: number;
   system: string;
   theme: ThemeChoice;
   readingSize: number;
   readingFace: ReadingFace;
   dropCaps: boolean;
-  followUps: boolean;
-  transport: TransportChoice;
 }
 
 export type ConnectionStatus =
+  /** No API key saved yet. */
+  | 'no-key'
+  /** Handshake in flight. */
   | 'connecting'
   | 'live'
-  | 'challenge'
-  | 'verifying'
+  /** Inception rejected the key. */
+  | 'auth'
+  /** Out of credit / billing inactive. */
+  | 'billing'
   | 'offline'
-  | 'blocked'
   | 'error';
 
 export interface ConnectionState {
   status: ConnectionStatus;
-  mode: TransportMode;
   message?: string;
   detail?: string;
-  fetchedAt: number | null;
-  issuedAt: number | null;
-  refreshCount: number;
-  /** Progress text while a security check is running. */
-  progress?: string;
+  /** Round trip of the last successful handshake. */
+  latencyMs?: number;
+  checkedAt: number | null;
+  /** The key, masked (e.g. "sk_a…9fQ2"), or null. */
+  keyHint: string | null;
+  /** Saved in localStorage (true) or only for this tab (false). */
+  remember: boolean;
+}
+
+export interface RetryNote {
+  attempt: number;
+  of: number;
+  kind: InceptionErrorKind;
+  until: number;
 }
 
 export interface UiState {
   sidebarOpen: boolean;
   settingsOpen: boolean;
+  /** The key form is open on purpose (changing a working key). */
+  keyEditor: boolean;
+  /** A key submitted from the card is being checked — keep the card on screen meanwhile. */
+  keyCheck: boolean;
 }
 
 export interface AppState {
   ready: boolean;
-  runtime: 'extension' | 'web';
   settings: Settings;
   connection: ConnectionState;
+  models: ModelInfo[];
   list: ConversationMeta[];
   active: Conversation | null;
   streamingId: string | null;
+  /** Set while a request waits to be retried (429/5xx backoff). */
+  retry: RetryNote | null;
   ui: UiState;
 }

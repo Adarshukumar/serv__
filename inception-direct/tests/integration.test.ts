@@ -1,155 +1,167 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { InceptionClient, InceptionError, SessionManager, SourceCollector, type FetchLike, type StreamEvent } from '../src/core';
-// @ts-expect-error — plain-JS test fixture without type declarations
-import { startMockInception } from './fixtures/mock-inception.mjs';
-
-/**
- * End-to-end over a real socket against the local protocol simulator: real fetch,
- * real chunked transfer, real cookies (a tiny jar stands in for the browser's).
- */
+import { InceptionClient } from '../src/core/client';
+import { InceptionError } from '../src/core/errors';
+import type { StreamEvent } from '../src/core/events';
+// @ts-expect-error — plain JS test fixture
+import { answerFor, startMockInception } from './fixtures/mock-inception.mjs';
+import { collect } from './helpers';
 
 interface Mock {
   url: string;
-  setChallenge(on: boolean): void;
-  close(): Promise<void>;
-  state: { log: { path: string; status: number }[] };
-}
-
-function cookieJarFetch(): FetchLike & { jar: Map<string, string> } {
-  const jar = new Map<string, string>();
-  const fn: FetchLike = async (input, init = {}) => {
-    const headers = new Headers(init.headers);
-    if (jar.size) headers.set('cookie', [...jar].map(([k, v]) => `${k}=${v}`).join('; '));
-    const res = await fetch(input, { ...init, headers });
-    for (const line of res.headers.getSetCookie()) {
-      const [pair] = line.split(';');
-      const i = pair!.indexOf('=');
-      jar.set(pair!.slice(0, i).trim(), pair!.slice(i + 1).trim());
-    }
-    return res;
+  state: {
+    requests: { kind: string; model: string; effort?: string; diffusing: boolean; includeUsage: boolean; reasoningSummary: boolean; maxTokens?: number; roles: string[] }[];
+    log: { method: string; path: string; status: number }[];
   };
-  return Object.assign(fn, { jar });
+  close(): Promise<void>;
 }
 
 let mock: Mock;
-
 beforeAll(async () => {
-  mock = (await startMockInception({ deltaDelayMs: 2 })) as Mock;
+  mock = (await startMockInception({ blockDelayMs: 1 })) as Mock;
 });
-
 afterAll(async () => {
   await mock.close();
 });
 
-function makeClient() {
-  const fetchImpl = cookieJarFetch();
-  const session = new SessionManager({ baseUrl: mock.url, fetch: fetchImpl });
-  const client = new InceptionClient({ baseUrl: mock.url, session, getFetch: () => fetchImpl, rateLimitBackoffMs: 5 });
-  return { client, session, fetchImpl };
-}
+const make = (key: string | null = 'test-key') => new InceptionClient({ apiUrl: mock.url, getKey: () => key, retryBaseMs: 5 });
+const text = (events: StreamEvent[]) => events.filter((e) => e.type === 'delta').map((e) => (e as { text: string }).text).join('');
 
-async function run(client: InceptionClient, text: string, extra: Partial<Parameters<InceptionClient['chat']>[0]> = {}) {
-  const events: StreamEvent[] = [];
-  for await (const event of client.chat({ chatId: 'it-chat', turns: [{ role: 'user', text }], thinking: 'medium', webSearch: true, ...extra })) {
-    events.push(event);
+async function failure(promise: Promise<unknown>): Promise<InceptionError> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as InceptionError;
   }
-  const text_ = events.filter((e) => e.type === 'text-delta').map((e) => (e as { delta: string }).delta).join('');
-  const reasoning = events.filter((e) => e.type === 'reasoning-delta').map((e) => (e as { delta: string }).delta).join('');
-  const sources = new SourceCollector();
-  for (const e of events) if (e.type === 'source') sources.add(e.source);
-  return { events, text: text_, reasoning, sources: sources.list() };
+  throw new Error('expected a failure');
 }
 
-describe('client ↔ protocol simulator', () => {
-  it('creates a session (token + cookie) and streams a full answer', async () => {
-    const { client, session, fetchImpl } = makeClient();
-    await session.refresh();
-    expect(session.getState().token).toMatch(/^\d{10}\.[0-9a-f]{32}\.[0-9a-f]{64}$/);
-    expect(fetchImpl.jar.has('session')).toBe(true);
-
-    const result = await run(client, 'Why is the sky blue?');
-    expect(result.reasoning).toContain('Structuring a clear answer.');
-    expect(result.text).toContain('## On “Why is the sky blue?”');
-    expect(result.text).toContain('नमस्ते 👋 — café ✓');
-    expect(result.text).toContain('thinking **medium**');
-    expect(result.events.some((e) => e.type === 'searching')).toBe(true);
-    expect(result.sources.map((s) => s.url)).toEqual([
-      'https://example.org/physics/scattering',
-      'https://example.net/atmosphere',
-      'https://example.com/light',
-    ]);
-    expect(result.events.at(-1)).toEqual({ type: 'finish', finishReason: undefined });
+describe('client ↔ API simulator, over a real socket', () => {
+  it('lists models', async () => {
+    const models = await make(null).models();
+    expect(models.map((m) => m.id)).toEqual(['mercury-2.5', 'mercury-2']);
   });
 
-  it('honours thinking mode and web search settings', async () => {
-    const { client } = makeClient();
-    const result = await run(client, 'Quick one', { thinking: 'instant', webSearch: false });
-    expect(result.reasoning).toBe('');
-    expect(result.sources).toEqual([]);
-    expect(result.text).toContain('web search **off**');
+  it('handshake: good key → ok; wrong key → auth; broke key → billing', async () => {
+    await expect(make().verify('mercury-2.5')).resolves.toMatchObject({ model: 'mercury-2.5' });
+    expect((await failure(make('wrong').verify('mercury-2.5'))).kind).toBe('auth');
+    expect((await failure(make('broke-key').verify('mercury-2.5'))).kind).toBe('billing');
+    expect((await failure(make().verify('mercury-9'))).kind).toBe('model');
   });
 
-  it('surfaces a mid-stream error event and keeps the partial text', async () => {
-    const { client } = makeClient();
-    const result = await run(client, 'Trigger #error please');
-    const error = result.events.find((e) => e.type === 'error');
-    expect(error).toEqual({ type: 'error', message: 'Simulated upstream failure' });
-    expect(result.text.length).toBeGreaterThan(10);
+  it('streams a full answer with history + system, and the request is exactly as documented', async () => {
+    const turns = [
+      { role: 'user' as const, text: 'Earlier question' },
+      { role: 'assistant' as const, text: 'Earlier answer' },
+      { role: 'user' as const, text: 'Why is the sky blue?' },
+    ];
+    const events = await collect(
+      make().chat({ model: 'mercury-2.5', turns, system: 'Be concise.', effort: 'low', maxTokens: 16384, reasoningSummary: true }),
+    );
+    const request = mock.state.requests.at(-1)!;
+    expect(request).toMatchObject({ kind: 'chat', model: 'mercury-2.5', effort: 'low', includeUsage: true, reasoningSummary: true, maxTokens: 16384 });
+    expect(request.roles).toEqual(['system', 'user', 'assistant', 'user']);
+
+    const expected = answerFor(
+      { model: 'mercury-2.5', reasoning_effort: 'low', messages: [{ role: 'system' }, {}, {}, {}] },
+      'Why is the sky blue?',
+    ) as string;
+    expect(text(events)).toBe(expected);
+    expect(text(events)).toContain('नमस्ते 👋 — café ✓');
+    expect(events).toContainEqual({ type: 'finish', reason: 'stop' });
+    expect(events.some((e) => e.type === 'reasoning-summary')).toBe(true);
+    const usage = events.find((e) => e.type === 'usage') as { usage: { reasoningTokens: number } } | undefined;
+    expect(usage?.usage.reasoningTokens).toBe(60);
   });
 
-  it('recovers from 429s with backoff', async () => {
-    const { client } = makeClient();
-    const result = await run(client, 'Rate limit me #429', { chatId: 'rl-chat' } as never);
-    expect(result.text).toContain('End of the simulated answer.');
+  it('diffusing: canvases converge on the final answer', async () => {
+    const events = await collect(make().chat({ model: 'mercury-2', turns: [{ role: 'user', text: 'Diffuse please' }], effort: 'instant', diffusing: true, maxTokens: 4096 }));
+    const canvases = events.filter((e) => e.type === 'canvas').map((e) => (e as { text: string }).text);
+    expect(canvases.length).toBeGreaterThan(5);
+    expect(canvases.at(-1)).toContain('End of the simulated answer.');
+    expect(canvases[1]).not.toBe(canvases.at(-1)); // early steps are still noisy
+    expect(mock.state.requests.at(-1)).toMatchObject({ diffusing: true, effort: 'instant', reasoningSummary: false });
   });
 
-  it('re-creates the session when the token is rejected', async () => {
-    const { client, session } = makeClient();
-    await session.refresh();
-    // Corrupt the cached token: the server answers 401, the client refreshes and retries.
-    (session as unknown as { state: { token: string } }).state.token = '1790000000.deadbeefdeadbeefdeadbeefdeadbeef.x';
-    const result = await run(client, 'Still there?');
-    expect(result.text).toContain('End of the simulated answer.');
-    expect(session.getState().refreshCount).toBe(2);
+  it('recovers from 429 ×2 and a 503 on its own', async () => {
+    const limited = await collect(make().chat({ model: 'mercury-2.5', turns: [{ role: 'user', text: 'Busy #429' }], maxTokens: 4096 }));
+    expect(text(limited)).toContain('End of the simulated answer.');
+    const overloaded = await collect(make().chat({ model: 'mercury-2.5', turns: [{ role: 'user', text: 'Busy #503' }], maxTokens: 4096 }));
+    expect(text(overloaded)).toContain('End of the simulated answer.');
+    const statuses = mock.state.log.filter((l) => l.path === '/v1/chat/completions').map((l) => l.status);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(2);
+    expect(statuses.filter((s) => s === 503)).toHaveLength(1);
   });
 
-  it('reports the checkpoint, then works once the site has been visited', async () => {
-    mock.setChallenge(true);
-    try {
-      const { client, session, fetchImpl } = makeClient();
-      const error = (await session.refresh().catch((e: unknown) => e)) as InceptionError;
-      expect(error.kind).toBe('challenge');
-      // "Visit the site" — in the extension this happens in a real tab.
-      await fetchImpl(`${mock.url}/`);
-      expect(fetchImpl.jar.get('_vcrcs')).toBe('cleared');
-      const result = await run(client, 'After the check');
-      expect(result.text).toContain('End of the simulated answer.');
-    } finally {
-      mock.setChallenge(false);
-    }
+  it('reports an error sent inside the stream, a dropped connection, and a length stop', async () => {
+    const errored = await collect(make().chat({ model: 'mercury-2.5', turns: [{ role: 'user', text: 'Fail #error' }], maxTokens: 4096 }));
+    expect(errored).toContainEqual({ type: 'error', message: 'Simulated upstream failure', code: 'server_error' });
+
+    const dropped = await failure(collect(make().chat({ model: 'mercury-2.5', turns: [{ role: 'user', text: 'Cut #drop' }], maxTokens: 4096 })));
+    expect(dropped.kind).toBe('stream');
+
+    const long = await collect(make().chat({ model: 'mercury-2.5', turns: [{ role: 'user', text: 'Long #length' }], maxTokens: 4096 }));
+    expect(long).toContainEqual({ type: 'finish', reason: 'length' });
   });
 
-  it('fetches follow-up suggestions for a finished exchange', async () => {
-    const { client } = makeClient();
-    const result = await run(client, 'Tell me about tides');
-    const list = await client.followUps([
-      { role: 'user', text: 'Tell me about tides' },
-      { role: 'assistant', text: result.text },
+  it('stops a slow stream on abort', async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+    const err = await failure(
+      (async () => {
+        let n = 0;
+        for await (const e of make().chat({ model: 'mercury-2.5', turns: [{ role: 'user', text: 'Slow #slow' }], maxTokens: 4096, signal: controller.signal })) {
+          if (e.type === 'delta' && ++n === 2) controller.abort();
+        }
+      })(),
+    );
+    expect(err.kind).toBe('aborted');
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
+
+  it('follow-ups via structured output', async () => {
+    const list = await make().followUps('mercury-2.5', [
+      { role: 'user', text: 'Why is the sky blue?' },
+      { role: 'assistant', text: 'Scattering.' },
     ]);
     expect(list).toHaveLength(3);
-    expect(list[0]).toContain('Tell me about tides');
+    expect(mock.state.requests.at(-1)!.kind).toBe('follow-ups');
   });
 
-  it('can be stopped mid-answer', async () => {
-    const { client } = makeClient();
-    const controller = new AbortController();
-    let deltas = 0;
-    const error = await (async () => {
-      for await (const event of client.chat({ chatId: 'stop', turns: [{ role: 'user', text: 'Long one #slow' }], signal: controller.signal, thinking: 'instant', webSearch: false })) {
-        if (event.type === 'text-delta' && ++deltas === 2) controller.abort();
-      }
-    })().catch((e: unknown) => e);
-    expect((error as InceptionError).kind).toBe('aborted');
-    expect(deltas).toBe(2);
+  it('the simulator is strict: unknown parameters are refused (catches client drift)', async () => {
+    const res = await fetch(`${mock.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test-key' },
+      body: JSON.stringify({ model: 'mercury-2.5', messages: [{ role: 'user', content: 'x' }], reasoningEffort: 'high' }),
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { message: string } }).error.message).toMatch(/reasoningEffort/);
+  });
+});
+
+describe('CORS, as the live API answers it', () => {
+  const origin = 'https://4173-example.e2b.app';
+
+  it('a real preflight for Authorization + Content-Type is allowed', async () => {
+    const res = await fetch(`${mock.url}/v1/chat/completions`, {
+      method: 'OPTIONS',
+      headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'authorization,content-type' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBe(origin);
+    expect(res.headers.get('access-control-allow-headers')).toContain('authorization');
+    expect(res.headers.get('access-control-allow-methods')).toContain('POST');
+  });
+
+  it('a bare OPTIONS is a 405 — but still carries the reflected origin (seen live)', async () => {
+    const res = await fetch(`${mock.url}/v1/chat/completions`, { method: 'OPTIONS', headers: { origin } });
+    expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toBe('POST');
+    expect(res.headers.get('access-control-allow-origin')).toBe(origin);
+  });
+
+  it('responses reflect the page origin', async () => {
+    const res = await fetch(`${mock.url}/v1/models`, { headers: { origin } });
+    expect(res.headers.get('access-control-allow-origin')).toBe(origin);
+    expect(res.headers.get('access-control-allow-credentials')).toBe('true');
   });
 });

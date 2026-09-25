@@ -1,10 +1,12 @@
-import { memo, useEffect, useState } from 'react';
-import { THINKING_LABELS } from '../../core/config';
-import { retry, send, store, verify } from '../controller';
-import { formatClock, formatDuration, hostOf } from '../format';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { EFFORT_LABELS, LINKS, displayModelName, isReasoningEffort } from '../../core/config';
+import { openKeyEditor, retry, send, store } from '../controller';
+import { diffCanvas } from '../diffusion';
+import { formatClock, formatCount, formatDuration, formatRate, formatTokenLimit } from '../format';
 import { countWords } from '../markdown/render';
 import { useStore } from '../store';
-import type { Message } from '../types';
+import type { AssistantMeta, Message } from '../types';
+import { ExternalIcon } from './Icons';
 import { Markdown } from './Markdown';
 
 /* ───────────────────────────── user ───────────────────────────── */
@@ -32,67 +34,53 @@ interface AssistantTurnProps {
 export const AssistantTurn = memo(function AssistantTurn({ message, isLast }: AssistantTurnProps) {
   const streaming = message.status === 'streaming';
   const content = message.content ?? '';
-  const reasoning = message.reasoning ?? '';
   const meta = message.meta;
   const dropCaps = useStore(store, (s) => s.settings.dropCaps);
+  const models = useStore(store, (s) => s.models);
   const firstBlockIsLongParagraph = /^[^\n#>*\-|`$\\\d][^\n]{160,}/.test(content.trimStart());
-  const thinkingNow = streaming && reasoning.length > 0 && !meta?.firstTokenAt;
-  const waiting = streaming && !content && !reasoning && !message.searching;
+  const modelName = meta?.model ? (models.find((m) => m.id === meta.model)?.name ?? displayModelName(undefined, meta.model)) : null;
+  const finished = message.status === 'done' || message.status === 'stopped';
 
   return (
     <section className="turn turn--assistant" aria-busy={streaming}>
       <div className="turn-label">
         <span className="turn-who">Mercury</span>
-        {meta && (
+        {meta && modelName ? (
           <span className="turn-settings">
-            {THINKING_LABELS[meta.thinking]}
-            {meta.webSearch ? ' · Web' : ''}
+            {modelName}
+            {isReasoningEffort(meta.effort) ? ` · ${EFFORT_LABELS[meta.effort]}` : ''}
+            {meta.diffusing ? ' · Diffusion' : ''}
           </span>
-        )}
+        ) : null}
       </div>
 
-      {reasoning && <Thinking text={reasoning} live={thinkingNow} startedAt={meta?.reasoningStartedAt} endedAt={meta?.reasoningEndedAt} />}
+      {!streaming && <Reasoning message={message} />}
+      {streaming && !content && <Pending meta={meta} />}
 
-      {message.searching && !content && (
-        <p className="status-line">
-          Searching the web<span className="dots" aria-hidden="true" />
-        </p>
-      )}
-      {waiting && (
-        <p className="status-line">
-          Diffusing<span className="dots" aria-hidden="true" />
-        </p>
-      )}
-      {message.searchFailed && <p className="aside-note">Web search didn’t work out this time; Mercury answered without it.</p>}
-
-      {content && (
-        <Markdown
-          text={content}
-          streaming={streaming}
-          className={`prose${dropCaps && firstBlockIsLongParagraph ? ' prose--dropcap' : ''}`}
-        />
-      )}
+      {content &&
+        (streaming && meta?.diffusing ? (
+          <DiffusionCanvas text={content} steps={meta.steps ?? 0} />
+        ) : (
+          <Markdown
+            text={content}
+            streaming={streaming}
+            className={`prose${dropCaps && firstBlockIsLongParagraph ? ' prose--dropcap' : ''}`}
+          />
+        ))}
 
       {message.status === 'stopped' && <p className="stopped-mark">— stopped here</p>}
+      {message.status === 'done' && meta?.finishReason === 'length' && (
+        <p className="aside-note">
+          Mercury reached the length limit{meta.maxTokens ? ` (${formatTokenLimit(meta.maxTokens)} tokens)` : ''}. Ask it to continue, or raise the
+          limit in Settings.
+        </p>
+      )}
+      {message.status === 'done' && meta?.finishReason === 'content_filter' && (
+        <p className="aside-note">Inception’s content filter ended this answer early.</p>
+      )}
       {message.status === 'error' && message.error && <ErrorNote message={message} />}
 
-      {message.sources && message.sources.length > 0 && (
-        <section className="sources" aria-label="Sources">
-          <h4 className="small-caps">Sources</h4>
-          <ol>
-            {message.sources.map((source) => (
-              <li key={source.url}>
-                <a href={source.url} target="_blank" rel="noopener noreferrer">
-                  <span className="source-title">{source.title || hostOf(source.url)}</span>
-                  <span className="source-host">{hostOf(source.url)}</span>
-                </a>
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
-
-      {!streaming && (message.status === 'done' || message.status === 'stopped') && <Colophon message={message} isLast={isLast} />}
+      {finished && <Colophon message={message} isLast={isLast} />}
 
       {isLast && !streaming && message.followUps && message.followUps.length > 0 && (
         <nav className="follow-ups" aria-label="Suggested follow-ups">
@@ -112,40 +100,116 @@ export const AssistantTurn = memo(function AssistantTurn({ message, isLast }: As
   );
 });
 
-function Thinking({ text, live, startedAt, endedAt }: { text: string; live: boolean; startedAt?: number; endedAt?: number }) {
+/** Before the first word: a live timer — or, while backing off, why and for how long. */
+function Pending({ meta }: { meta?: AssistantMeta }) {
+  const retryNote = useStore(store, (s) => s.retry);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => tick((n) => n + 1), 100);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  if (retryNote) {
+    const seconds = Math.max(0, Math.ceil((retryNote.until - Date.now()) / 1000));
+    const why =
+      retryNote.kind === 'rate-limit'
+        ? 'Inception is rate-limiting'
+        : retryNote.kind === 'network'
+          ? 'The connection hiccuped'
+          : 'Inception is busy';
+    return (
+      <p className="status-line status-line--retry" role="status">
+        {why} — retrying {seconds > 0 ? `in ${seconds} s` : 'now'}
+        <span className="status-count">
+          {' '}
+          · attempt {retryNote.attempt} of {retryNote.of}
+        </span>
+      </p>
+    );
+  }
+
+  const elapsed = meta ? Date.now() - meta.startedAt : 0;
+  const label = meta?.effort === 'instant' ? (meta?.diffusing ? 'Diffusing' : 'Writing') : 'Thinking';
+  return (
+    <p className="status-line" role="status">
+      {label}
+      <span className="dots" aria-hidden="true" />
+      <span className="status-timer">{(elapsed / 1000).toFixed(1)} s</span>
+    </p>
+  );
+}
+
+/**
+ * Diffusing mode: the whole answer, redrawn at every denoising step. Words that
+ * changed since the previous frame are inked in the accent colour as they settle.
+ */
+function DiffusionCanvas({ text, steps }: { text: string; steps: number }) {
+  const previous = useRef('');
+  const segments = useMemo(() => diffCanvas(previous.current, text), [text]);
+  useEffect(() => {
+    previous.current = text;
+  }, [text]);
+
+  return (
+    <div className="canvas">
+      <p className="canvas-meter small-caps" aria-live="off">
+        Denoising · step {steps}
+      </p>
+      <div className="canvas-text" aria-label="Mercury is writing" aria-busy="true">
+        {segments.map((segment, i) =>
+          segment.fresh ? (
+            <span key={i} className="canvas-fresh">
+              {segment.text}
+            </span>
+          ) : (
+            <span key={i}>{segment.text}</span>
+          ),
+        )}
+        <span className="caret" aria-hidden="true" />
+      </div>
+    </div>
+  );
+}
+
+/** How long Mercury thought, and — if Inception returned one — a summary of its reasoning. */
+function Reasoning({ message }: { message: Message }) {
   const [open, setOpen] = useState(false);
-  const lines = text.split('\n').filter((line) => line.trim());
-  const lastLine = lines[lines.length - 1] ?? '';
-  const seconds = startedAt && endedAt ? formatDuration(endedAt - startedAt) : '';
+  const meta = message.meta;
+  if (!meta || !meta.firstTokenAt || meta.effort === 'instant') return null;
+  const thoughtMs = meta.firstTokenAt - meta.startedAt;
+  const reasoningTokens = meta.usage?.reasoningTokens ?? 0;
+  const label = `Thought for ${formatDuration(thoughtMs)}${reasoningTokens ? ` · ${formatCount(reasoningTokens)} reasoning tokens` : ''}`;
+  const summary = message.reasoningSummary;
+
+  if (!summary) return <p className="thinking-line">{label}</p>;
   return (
     <details className="thinking" open={open} onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}>
       <summary>
-        <span className="thinking-label">{live ? 'Thinking' : seconds ? `Thought for ${seconds}` : 'Thoughts'}</span>
-        {live && !open ? (
-          <span className="thinking-ticker" aria-live="off">
-            {lastLine}
-          </span>
-        ) : (
-          <span className="thinking-hint">{open ? 'hide' : `${lines.length} ${lines.length === 1 ? 'line' : 'lines'} · show`}</span>
-        )}
+        <span className="thinking-label">{label}</span>
+        <span className="thinking-hint">{open ? 'hide summary' : 'show summary'}</span>
       </summary>
-      <div className="thinking-body">{text}</div>
+      <div className="thinking-body">{summary}</div>
     </details>
   );
 }
 
+const ERROR_HINTS: Partial<Record<NonNullable<Message['error']>['kind'], string>> = {
+  'rate-limit': 'Give it a few seconds, then retry.',
+  overloaded: 'Try again in a moment.',
+  server: 'Try again in a moment.',
+  network: 'Check your connection and retry.',
+  stream: 'Retry to get the whole answer.',
+  auth: 'Update your API key — this answer will be retried automatically.',
+  'no-key': 'Add your API key — this answer will be retried automatically.',
+  billing: 'Add credit (or use another key), then retry.',
+  model: 'Pick another model in Settings, then retry.',
+};
+
 function ErrorNote({ message }: { message: Message }) {
   const error = message.error!;
-  const runtime = useStore(store, (s) => s.runtime);
   const busy = useStore(store, (s) => s.streamingId !== null);
-  const hint =
-    error.kind === 'rate-limit'
-      ? 'Give it a few seconds, then retry.'
-      : error.kind === 'network'
-        ? 'Check your connection and retry.'
-        : error.kind === 'challenge'
-          ? 'Pass the security check and this answer will be retried automatically.'
-          : '';
+  const hint = error.kind === 'invalid' && error.code === 'context_length_exceeded' ? 'Start a new conversation to continue.' : (ERROR_HINTS[error.kind] ?? '');
+  const needsKey = error.kind === 'auth' || error.kind === 'no-key';
   return (
     <div className="error-note" role="alert">
       <p>
@@ -154,14 +218,21 @@ function ErrorNote({ message }: { message: Message }) {
         {hint ? <span className="error-hint"> {hint}</span> : null}
       </p>
       <div className="error-actions">
-        {error.kind === 'challenge' && runtime === 'extension' ? (
-          <button type="button" className="text-button" onClick={() => void verify()}>
-            Run security check
+        {needsKey ? (
+          <button type="button" className="text-button" onClick={openKeyEditor}>
+            Update key
           </button>
         ) : null}
-        <button type="button" className="text-button" disabled={busy} onClick={() => void retry(message.id)}>
-          Retry
-        </button>
+        {error.kind === 'billing' ? (
+          <a className="text-button" href={LINKS.billing} target="_blank" rel="noopener noreferrer">
+            Billing <ExternalIcon size={12} />
+          </a>
+        ) : null}
+        {!needsKey ? (
+          <button type="button" className="text-button" disabled={busy} onClick={() => void retry(message.id)}>
+            Retry
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -172,6 +243,7 @@ function Colophon({ message, isLast }: { message: Message; isLast: boolean }) {
   const busy = useStore(store, (s) => s.streamingId !== null);
   const meta = message.meta;
   const words = countWords(message.content);
+  const usage = meta?.usage;
   const total = meta?.finishedAt && meta.startedAt ? meta.finishedAt - meta.startedAt : null;
   const firstWord = meta?.firstTokenAt && meta.startedAt ? meta.firstTokenAt - meta.startedAt : null;
 
@@ -181,13 +253,20 @@ function Colophon({ message, isLast }: { message: Message; isLast: boolean }) {
     return () => window.clearTimeout(timer);
   }, [copied]);
 
+  const facts = [
+    `${formatCount(words)} ${words === 1 ? 'word' : 'words'}`,
+    usage ? `${formatCount(usage.completionTokens)} tokens` : '',
+    // End-to-end throughput, thinking included: what it actually felt like.
+    usage && total ? formatRate(usage.completionTokens, total) : '',
+    firstWord !== null ? `first word ${formatDuration(firstWord)}` : '',
+    total !== null ? formatDuration(total) : '',
+    meta?.diffusing && meta.steps ? `${meta.steps} steps` : '',
+  ].filter(Boolean);
+
   return (
     <footer className="colophon">
-      <span className="colophon-meta">
-        {words.toLocaleString()} {words === 1 ? 'word' : 'words'}
-        {firstWord !== null ? ` · first word ${formatDuration(firstWord)}` : ''}
-        {total !== null ? ` · ${formatDuration(total)}` : ''}
-        {meta?.mode === 'bridge' ? ' · via site tab' : ''}
+      <span className="colophon-meta" title={usage ? `${formatCount(usage.promptTokens)} prompt tokens${usage.cachedTokens ? ` (${formatCount(usage.cachedTokens)} cached)` : ''}` : undefined}>
+        {facts.join(' · ')}
       </span>
       <span className="colophon-actions">
         <button

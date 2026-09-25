@@ -7,8 +7,8 @@ import { escapeHtml, mathExtension } from './math';
  * Markdown → safe, typeset HTML.
  *
  * - GFM (tables, task lists, strikethrough), TeX math via KaTeX, highlighted code.
- * - Everything is sanitised with DOMPurify: model output is untrusted, and this runs
- *   on an extension page.
+ * - Everything is sanitised with DOMPurify: model output is untrusted, and this page
+ *   holds the user's API key.
  * - Remote images become links: rendering them would make the browser contact
  *   arbitrary servers, which this app promises not to do.
  */

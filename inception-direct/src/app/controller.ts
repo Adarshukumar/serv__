@@ -1,121 +1,111 @@
 import {
+  FALLBACK_MODELS,
   InceptionClient,
-  SESSION_REFRESH_MS,
-  SessionManager,
-  SourceCollector,
   createId,
   toInceptionError,
   type ChatTurn,
   type InceptionError,
+  type ModelInfo,
+  type RetryInfo,
 } from '../core';
-import type { ProbeResult } from '../platform/bridgeProtocol';
-import { BASE_HOST, BASE_URL, isExtensionPage } from '../platform/env';
-import { runSecurityCheck } from '../platform/siteTab';
-import {
-  createBridgeTransport,
-  createDirectTransport,
-  createWebTransport,
-  type Transport,
-  type TransportMode,
-} from '../platform/transport';
+import { API_URL } from './env';
 import * as storage from './storage';
 import { createStore } from './store';
 import type { AppState, AssistantMeta, ConnectionState, Conversation, Message, Settings } from './types';
 
 /**
- * The app's brain: owns the transport, the session and the client, and runs the flow
+ * The app's brain. React components only read the store and call these functions.
  *
- *   start → create session → live ─┬─ every 10 min (while visible): refresh token
- *                                  ├─ send → stream real tokens → follow-ups
- *                                  ├─ checkpoint → let the browser pass it → retry
- *                                  └─ direct refused (auto) → site-tab bridge → retry
+ *   open the page ─► key saved? ── no ──► key card (paste once, kept in this browser)
+ *                        │ yes
+ *                        ▼
+ *        handshake: one tiny real completion ─► live ─┬─ send → stream real text → follow-ups
+ *                        │                             └─ 429 / 5xx → back off and retry
+ *                        └─ 401 → key card · 402 → billing · offline → retry when back online
  *
- * React components only read the store and call these functions.
+ * Every request goes from this browser straight to Inception's API. Nothing in between.
  */
 
-const runtime: AppState['runtime'] = isExtensionPage() ? 'extension' : 'web';
 const STREAM_FRAME_MS = 40;
-const REFRESH_CHECK_MS = 60_000;
 
 const initialSettings = storage.loadSettings();
+const storedKey = storage.loadKey();
+let apiKey: string | null = storedKey?.key ?? null;
 
 export const store = createStore<AppState>({
   ready: false,
-  runtime,
   settings: initialSettings,
   connection: {
-    status: 'connecting',
-    mode: initialMode(initialSettings),
-    fetchedAt: null,
-    issuedAt: null,
-    refreshCount: 0,
+    status: apiKey ? 'connecting' : 'no-key',
+    checkedAt: null,
+    keyHint: apiKey ? storage.maskKey(apiKey) : null,
+    remember: storedKey?.remember ?? true,
   },
+  models: [...FALLBACK_MODELS],
   list: [],
   active: null,
   streamingId: null,
-  ui: { sidebarOpen: false, settingsOpen: false },
-});
-
-let transport: Transport = makeTransport(initialMode(initialSettings));
-
-const session = new SessionManager({
-  baseUrl: BASE_URL,
-  fetch: (url, init) => transport.fetch(url, init),
+  retry: null,
+  ui: { sidebarOpen: false, settingsOpen: false, keyEditor: false, keyCheck: false },
 });
 
 const client = new InceptionClient({
-  baseUrl: BASE_URL,
-  session,
-  getFetch: () => transport.fetch,
+  apiUrl: API_URL,
+  getKey: () => apiKey,
+  onRetry: (info) => onRetry(info),
 });
 
-/** Conversations touched this session (active one, and any that is still streaming). */
+/** Conversations touched this session (the active one, and any that is still streaming). */
 const cache = new Map<string, Conversation>();
 const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 let streaming: { convId: string; messageId: string; controller: AbortController } | null = null;
+/** An answer that failed for want of a working key/credit — retried once that's fixed. */
 let pendingRetry: { convId: string; messageId: string } | null = null;
-let verifyController: AbortController | null = null;
 let connectRun = 0;
-let fellBack = false;
-let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let initialised = false;
 
 /* ────────────────────────────── setup ────────────────────────────── */
-
-function initialMode(settings: Settings): TransportMode {
-  if (runtime === 'web') return 'web';
-  return settings.transport === 'bridge' ? 'bridge' : 'direct';
-}
-
-function makeTransport(mode: TransportMode): Transport {
-  if (mode === 'direct') return createDirectTransport(BASE_URL);
-  if (mode === 'bridge') return createBridgeTransport(BASE_URL);
-  return createWebTransport();
-}
 
 export async function init(): Promise<void> {
   if (initialised) return;
   initialised = true;
 
-  session.subscribe((s) =>
-    setConnection({ fetchedAt: s.fetchedAt, issuedAt: s.issuedAt, refreshCount: s.refreshCount }),
-  );
-
   const list = await storage.listConversations().catch(() => []);
   store.set((s) => ({ ...s, list, ready: true }));
 
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') void refreshIfStale();
-  });
   window.addEventListener('online', () => {
     const { status } = store.get().connection;
     if (status === 'offline' || status === 'error') void connect();
   });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    const { status } = store.get().connection;
+    if (status === 'offline') void connect();
+  });
 
-  // "On the start, create the session."
-  await connect();
-  scheduleRefreshCheck();
+  void loadModels();
+  // "On the start, create the session": prove key + route with one real round trip.
+  if (apiKey) await connect();
+}
+
+async function loadModels(): Promise<void> {
+  try {
+    const models = await client.models();
+    store.set((s) => ({ ...s, models }));
+    if (!models.some((m) => m.id === store.get().settings.model)) updateSettings({ model: models[0]!.id });
+  } catch {
+    // keep the built-in list
+  }
+}
+
+export function currentModel(): ModelInfo {
+  const { models, settings } = store.get();
+  return models.find((m) => m.id === settings.model) ?? models[0] ?? FALLBACK_MODELS[0]!;
+}
+
+function maxTokensFor(model: ModelInfo, settings: Settings): number {
+  return Math.min(settings.lengthLimit, model.maxOutput ?? settings.lengthLimit);
 }
 
 /* ─────────────────────────── connection ─────────────────────────── */
@@ -124,133 +114,87 @@ function setConnection(patch: Partial<ConnectionState>): void {
   store.set((s) => ({ ...s, connection: { ...s.connection, ...patch } }));
 }
 
+/** The handshake. Resolves true when Inception accepted key, model and route. */
 export async function connect(): Promise<boolean> {
+  if (!apiKey) {
+    setConnection({ status: 'no-key', message: undefined, detail: undefined });
+    return false;
+  }
   const run = ++connectRun;
-  setConnection({
-    status: 'connecting',
-    mode: transport.mode,
-    message: transport.mode === 'bridge' ? `Opening ${BASE_HOST} in a background tab…` : undefined,
-    detail: undefined,
-    progress: undefined,
-  });
+  setConnection({ status: 'connecting', message: undefined, detail: undefined });
   try {
-    await transport.prepare();
-    await session.refresh();
+    const { latencyMs } = await client.verify(currentModel().id);
     if (run !== connectRun) return false;
-    setConnection({ status: 'live', message: undefined, detail: undefined, progress: undefined });
-    return true;
-  } catch (error) {
-    if (run !== connectRun) return false;
-    return handleFailure(toInceptionError(error), 'connect');
-  }
-}
-
-/**
- * Decide what a failure means for the connection. Returns true when it recovered
- * (switched to the site-tab bridge and reconnected), so the caller may retry.
- */
-async function handleFailure(err: InceptionError, context: 'connect' | 'chat'): Promise<boolean> {
-  if (err.kind === 'aborted') return false;
-
-  if (err.kind === 'challenge') {
-    setConnection({ status: 'challenge', message: err.message, detail: undefined });
-    return false;
-  }
-
-  if (transport.mode === 'web' && err.kind === 'network') {
-    setConnection({
-      status: 'blocked',
-      message: `Ordinary web pages are not allowed to call ${BASE_HOST} (the browser’s CORS rules block it).`,
-      detail: err.detail,
-    });
-    return false;
-  }
-
-  // While chatting, these belong to the message, not to the connection.
-  if (context === 'chat' && (err.kind === 'rate-limit' || err.kind === 'http' || err.kind === 'stream' || err.kind === 'protocol')) {
-    return false;
-  }
-
-  const online = typeof navigator === 'undefined' || navigator.onLine !== false;
-  const refused = err.kind === 'auth' || (err.kind === 'http' && err.status === 403) || (err.kind === 'network' && online);
-  if (transport.mode === 'direct' && store.get().settings.transport === 'auto' && refused && !fellBack) {
-    fellBack = true;
-    switchTransport('bridge');
-    return connect();
-  }
-
-  if (err.kind === 'network') setConnection({ status: 'offline', message: err.message, detail: err.detail });
-  else setConnection({ status: 'error', message: err.message, detail: err.detail });
-  return false;
-}
-
-function switchTransport(mode: TransportMode): void {
-  if (transport.mode === mode) return;
-  transport.dispose();
-  transport = makeTransport(mode);
-  session.reset();
-  setConnection({ mode });
-}
-
-function scheduleRefreshCheck(): void {
-  if (refreshTimer) clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(() => {
-    void refreshIfStale().finally(scheduleRefreshCheck);
-  }, REFRESH_CHECK_MS);
-}
-
-/** Keep the token young while the page is in use (the web app refreshes every 13 min). */
-async function refreshIfStale(): Promise<void> {
-  if (store.get().connection.status !== 'live' || document.visibilityState !== 'visible') return;
-  const age = session.tokenAge();
-  if (age !== null && age < SESSION_REFRESH_MS) return;
-  try {
-    await session.refresh();
-  } catch (error) {
-    await handleFailure(toInceptionError(error), 'connect');
-  }
-}
-
-/** Let the browser pass the site's security checkpoint, then reconnect (and retry). */
-export async function verify(): Promise<void> {
-  if (runtime !== 'extension') return;
-  verifyController?.abort();
-  const controller = new AbortController();
-  verifyController = controller;
-  setConnection({ status: 'verifying', progress: `Opening ${BASE_HOST}…`, message: undefined });
-  try {
-    await runSecurityCheck(BASE_URL, {
-      signal: controller.signal,
-      onProbe: (result, elapsed) => setConnection({ progress: describeProbe(result, elapsed) }),
-    });
-    const ok = await connect();
-    if (ok && pendingRetry) {
+    setConnection({ status: 'live', latencyMs, checkedAt: Date.now(), message: undefined, detail: undefined });
+    if (pendingRetry && !streaming) {
       const { convId, messageId } = pendingRetry;
       pendingRetry = null;
       void retry(messageId, convId);
     }
+    return true;
   } catch (error) {
-    const err = toInceptionError(error);
-    setConnection({
-      status: 'challenge',
-      progress: undefined,
-      message: err.kind === 'aborted' ? 'Security check cancelled — run it again whenever you are ready.' : err.message,
-    });
-  } finally {
-    if (verifyController === controller) verifyController = null;
+    if (run !== connectRun) return false;
+    applyFailure(toInceptionError(error));
+    return false;
   }
 }
 
-export function cancelVerify(): void {
-  verifyController?.abort();
+/** What a failure means for the connection as a whole. */
+function applyFailure(err: InceptionError): void {
+  switch (err.kind) {
+    case 'aborted':
+      return;
+    case 'no-key':
+      setConnection({ status: 'no-key', message: undefined, detail: undefined });
+      return;
+    case 'auth':
+      setConnection({ status: 'auth', message: err.message, detail: err.detail });
+      return;
+    case 'billing':
+      setConnection({ status: 'billing', message: err.message, detail: err.detail });
+      return;
+    case 'network':
+      setConnection({ status: 'offline', message: err.message, detail: err.detail });
+      return;
+    default:
+      setConnection({ status: 'error', message: err.message, detail: err.detail });
+  }
 }
 
-function describeProbe(result: ProbeResult | null, elapsedMs: number): string {
-  const seconds = Math.round(elapsedMs / 1000);
-  if (!result) return `Waiting for ${BASE_HOST} to load… ${seconds}s`;
-  if (result.reason === 'checkpoint') return `Your browser is passing the security check… ${seconds}s`;
-  if (result.reason.startsWith('session')) return `Nearly there — the site is still verifying this browser… ${seconds}s`;
-  return `Checking the site (${result.reason})… ${seconds}s`;
+/** Save a key (this browser only) and run the handshake with it. */
+export async function saveApiKey(raw: string, remember: boolean): Promise<boolean> {
+  const key = storage.cleanKey(raw);
+  if (!key) return false;
+  apiKey = key;
+  storage.saveKey(key, remember);
+  setConnection({ keyHint: storage.maskKey(key), remember });
+  setUi({ keyCheck: true });
+  try {
+    const ok = await connect();
+    if (ok) setUi({ keyEditor: false });
+    return ok;
+  } finally {
+    setUi({ keyCheck: false });
+  }
+}
+
+export function forgetApiKey(): void {
+  streaming?.controller.abort();
+  storage.forgetKey();
+  apiKey = null;
+  connectRun++;
+  pendingRetry = null;
+  setConnection({ status: 'no-key', keyHint: null, message: undefined, detail: undefined, latencyMs: undefined, checkedAt: null });
+  setUi({ keyEditor: false });
+}
+
+function onRetry(info: RetryInfo): void {
+  if (!streaming) return;
+  store.set((s) => ({ ...s, retry: { attempt: info.attempt, of: info.of, kind: info.kind, until: Date.now() + info.delayMs } }));
+}
+
+function clearRetry(): void {
+  if (store.get().retry) store.set((s) => ({ ...s, retry: null }));
 }
 
 /* ─────────────────────────── conversations ─────────────────────────── */
@@ -324,6 +268,7 @@ export async function selectChat(id: string): Promise<void> {
 
 export async function deleteChat(id: string): Promise<void> {
   if (streaming?.convId === id) streaming.controller.abort();
+  if (pendingRetry?.convId === id) pendingRetry = null;
   const timer = persistTimers.get(id);
   if (timer) clearTimeout(timer);
   persistTimers.delete(id);
@@ -338,6 +283,7 @@ export async function deleteChat(id: string): Promise<void> {
 
 export async function deleteAllChats(): Promise<void> {
   streaming?.controller.abort();
+  pendingRetry = null;
   for (const timer of persistTimers.values()) clearTimeout(timer);
   persistTimers.clear();
   cache.clear();
@@ -349,33 +295,23 @@ export async function deleteAllChats(): Promise<void> {
 
 function freshAssistantFields(now: number): Partial<Message> {
   const { settings } = store.get();
+  const model = currentModel();
   const meta: AssistantMeta = {
-    thinking: settings.thinking,
-    webSearch: settings.webSearch,
-    mode: transport.mode,
+    model: model.id,
+    effort: settings.effort,
+    diffusing: settings.diffusing,
+    maxTokens: maxTokensFor(model, settings),
     startedAt: now,
   };
-  return {
-    content: '',
-    reasoning: '',
-    sources: [],
-    followUps: undefined,
-    status: 'streaming',
-    error: undefined,
-    searching: false,
-    searchFailed: false,
-    meta,
-  };
+  return { content: '', reasoningSummary: undefined, followUps: undefined, status: 'streaming', error: undefined, meta };
 }
 
 /** Finished turns before the given message, in the shape the client sends. */
 function historyFor(messages: readonly Message[]): ChatTurn[] {
   const turns: ChatTurn[] = [];
   for (const m of messages) {
-    if (m.role === 'user') turns.push({ id: m.id, role: 'user', text: m.content });
-    else if ((m.status === 'done' || m.status === 'stopped') && m.content.trim()) {
-      turns.push({ id: m.id, role: 'assistant', text: m.content });
-    }
+    if (m.role === 'user') turns.push({ role: 'user', text: m.content });
+    else if ((m.status === 'done' || m.status === 'stopped') && m.content.trim()) turns.push({ role: 'assistant', text: m.content });
   }
   return turns;
 }
@@ -395,14 +331,14 @@ export async function send(text: string): Promise<void> {
   }
 
   const user: Message = { id: createId(), role: 'user', content: value, createdAt: now };
-  const assistant: Message = { id: createId(), role: 'assistant', createdAt: now, ...freshAssistantFields(now) } as Message;
+  const assistant = { id: createId(), role: 'assistant', createdAt: now, ...freshAssistantFields(now) } as Message;
   updateConversation(conversation.id, (c) => ({ ...c, updatedAt: now, messages: [...c.messages, user, assistant] }));
   persistNow(conversation.id);
 
   await streamAnswer(conversation.id, assistant.id);
 }
 
-/** Run (or re-run) an assistant message. */
+/** Run (or re-run) an assistant message with the current settings. */
 export async function retry(messageId: string, convId = store.get().active?.id): Promise<void> {
   if (!convId || streaming) return;
   const conversation = cache.get(convId) ?? (store.get().active?.id === convId ? store.get().active : null);
@@ -416,7 +352,7 @@ export function stop(): void {
   streaming?.controller.abort();
 }
 
-async function streamAnswer(convId: string, messageId: string, allowRecovery = true): Promise<void> {
+async function streamAnswer(convId: string, messageId: string): Promise<void> {
   const conversation = cache.get(convId);
   if (!conversation) return;
   const index = conversation.messages.findIndex((m) => m.id === messageId);
@@ -424,78 +360,85 @@ async function streamAnswer(convId: string, messageId: string, allowRecovery = t
 
   const turns = historyFor(conversation.messages.slice(0, index));
   const { settings } = store.get();
+  const meta: AssistantMeta = { ...(conversation.messages[index]!.meta as AssistantMeta) };
   const controller = new AbortController();
   streaming = { convId, messageId, controller };
-  store.set((s) => ({ ...s, streamingId: messageId }));
+  if (pendingRetry?.messageId === messageId) pendingRetry = null;
+  store.set((s) => ({ ...s, streamingId: messageId, retry: null }));
 
-  const meta: AssistantMeta = { ...(conversation.messages[index]!.meta as AssistantMeta), mode: transport.mode };
-  const sources = new SourceCollector();
   let text = '';
-  let reasoning = '';
-  let pendingText = '';
-  let pendingReasoning = '';
-  let streamError: string | null = null;
+  let pending = '';
+  let canvas: string | null = null;
+  let summary: string | undefined;
+  let streamError: { message: string; code?: string } | null = null;
   let frame: ReturnType<typeof setTimeout> | null = null;
-  let recover = false;
 
+  // Paint at most every 40 ms: smooth, and cheap even at Mercury's speed.
   const flush = () => {
     if (frame) {
       clearTimeout(frame);
       frame = null;
     }
-    if (!pendingText && !pendingReasoning) return;
-    text += pendingText;
-    reasoning += pendingReasoning;
-    pendingText = '';
-    pendingReasoning = '';
-    updateMessage(convId, messageId, { content: text, reasoning });
+    if (meta.diffusing) {
+      if (canvas === null || canvas === text) return;
+      text = canvas;
+    } else {
+      if (!pending) return;
+      text += pending;
+      pending = '';
+    }
+    updateMessage(convId, messageId, { content: text, meta: { ...meta } });
   };
   const scheduleFlush = () => {
     frame ??= setTimeout(flush, STREAM_FRAME_MS);
   };
+  const markFirst = (now: number) => {
+    if (meta.firstTokenAt) return;
+    meta.firstTokenAt = now;
+    clearRetry();
+    updateMessage(convId, messageId, { meta: { ...meta } });
+  };
 
   try {
     for await (const event of client.chat({
-      chatId: convId,
+      model: meta.model,
       turns,
-      thinking: settings.thinking,
-      webSearch: settings.webSearch,
       system: settings.system,
+      effort: meta.effort,
+      diffusing: meta.diffusing,
+      maxTokens: meta.maxTokens ?? settings.lengthLimit,
+      reasoningSummary: settings.reasoningSummary,
       signal: controller.signal,
     })) {
       const now = Date.now();
       switch (event.type) {
-        case 'reasoning-delta':
-          if (!meta.reasoningStartedAt) {
-            meta.reasoningStartedAt = now;
-            updateMessage(convId, messageId, { meta: { ...meta } });
-          }
-          pendingReasoning += event.delta;
+        case 'delta':
+          markFirst(now);
+          pending += event.text;
           scheduleFlush();
           break;
-        case 'text-delta':
-          if (!meta.firstTokenAt) {
-            meta.firstTokenAt = now;
-            if (meta.reasoningStartedAt && !meta.reasoningEndedAt) meta.reasoningEndedAt = now;
-            updateMessage(convId, messageId, { meta: { ...meta }, searching: false });
-          }
-          pendingText += event.delta;
+        case 'canvas':
+          // An empty frame never wipes text that has already arrived.
+          if (!event.text && canvas) break;
+          markFirst(now);
+          canvas = event.text;
+          meta.steps = (meta.steps ?? 0) + 1;
           scheduleFlush();
           break;
-        case 'source':
-          if (sources.add(event.source)) updateMessage(convId, messageId, { sources: sources.list() });
+        case 'reasoning-summary':
+          if (event.summary.status === 'complete' && event.summary.content.trim()) summary = event.summary.content.trim();
           break;
-        case 'searching':
-          updateMessage(convId, messageId, { searching: true });
+        case 'usage':
+          meta.usage = event.usage;
           break;
-        case 'search-error':
-          updateMessage(convId, messageId, { searching: false, searchFailed: true });
+        case 'finish':
+          meta.finishReason = event.reason;
+          break;
+        case 'warning':
+          meta.warning = event.message;
           break;
         case 'error':
-          streamError = event.message;
-          break;
-        case 'abort':
-          streamError ??= 'The server stopped this answer early.';
+          streamError = { message: event.message, code: event.code };
           break;
         default:
           break;
@@ -504,69 +447,70 @@ async function streamAnswer(convId: string, messageId: string, allowRecovery = t
 
     flush();
     meta.finishedAt = Date.now();
-    if (meta.reasoningStartedAt && !meta.reasoningEndedAt) meta.reasoningEndedAt = meta.finishedAt;
     const error = streamError
-      ? { kind: 'stream' as const, message: streamError }
+      ? { kind: 'stream' as const, message: streamError.message, code: streamError.code }
       : !text.trim()
-        ? { kind: 'protocol' as const, message: 'Mercury finished without writing an answer.' }
+        ? {
+            kind: 'protocol' as const,
+            message:
+              meta.finishReason === 'length'
+                ? 'Mercury used the whole length limit before writing anything — raise it in Settings.'
+                : 'Mercury finished without writing an answer.',
+          }
         : undefined;
-    updateMessage(convId, messageId, { status: error ? 'error' : 'done', error, searching: false, meta: { ...meta } });
-    if (store.get().connection.status !== 'live') setConnection({ status: 'live', message: undefined, detail: undefined });
-    if (!error && settings.followUps) void loadFollowUps(convId, messageId, [...turns, { role: 'assistant', text }]);
+    updateMessage(convId, messageId, { content: text, status: error ? 'error' : 'done', error, reasoningSummary: summary, meta: { ...meta } });
+    if (store.get().connection.status !== 'live') {
+      setConnection({ status: 'live', message: undefined, detail: undefined, checkedAt: Date.now() });
+    }
+    if (!error && settings.followUps) void loadFollowUps(convId, messageId, meta.model, [...turns, { role: 'assistant', text }]);
   } catch (error) {
     flush();
     const err = toInceptionError(error);
     meta.finishedAt = Date.now();
     if (err.kind === 'aborted') {
-      updateMessage(convId, messageId, { status: 'stopped', searching: false, meta: { ...meta } });
+      updateMessage(convId, messageId, { status: 'stopped', reasoningSummary: summary, meta: { ...meta } });
     } else {
       updateMessage(convId, messageId, {
         status: 'error',
-        searching: false,
+        reasoningSummary: summary,
         meta: { ...meta },
-        error: { kind: err.kind, message: err.message, detail: err.detail },
+        error: { kind: err.kind, message: err.message, detail: err.detail, code: err.code },
       });
-      if (err.kind === 'challenge') pendingRetry = { convId, messageId };
-      recover = (await handleFailure(err, 'chat')) && allowRecovery;
+      if (err.kind === 'auth' || err.kind === 'billing' || err.kind === 'no-key') {
+        pendingRetry = { convId, messageId };
+        applyFailure(err);
+      } else if (err.kind === 'network' && typeof navigator !== 'undefined' && navigator.onLine === false) {
+        applyFailure(err);
+      }
     }
   } finally {
+    if (frame) clearTimeout(frame);
     if (streaming?.messageId === messageId) {
       streaming = null;
-      store.set((s) => ({ ...s, streamingId: null }));
+      store.set((s) => ({ ...s, streamingId: null, retry: null }));
     }
     persistNow(convId);
   }
-
-  if (recover) {
-    updateMessage(convId, messageId, freshAssistantFields(Date.now()));
-    await streamAnswer(convId, messageId, false);
-  }
 }
 
-async function loadFollowUps(convId: string, messageId: string, turns: ChatTurn[]): Promise<void> {
-  const list = await client.followUps(turns);
+async function loadFollowUps(convId: string, messageId: string, model: string, turns: ChatTurn[]): Promise<void> {
+  const list = await client.followUps(model, turns);
   if (list.length) updateMessage(convId, messageId, { followUps: list });
 }
 
 /* ─────────────────────────── settings & ui ─────────────────────────── */
 
 export function updateSettings(patch: Partial<Settings>): void {
-  const before = store.get().settings;
-  const next = storage.sanitiseSettings({ ...before, ...patch });
+  const next = storage.sanitiseSettings({ ...store.get().settings, ...patch });
   storage.saveSettings(next);
   store.set((s) => ({ ...s, settings: next }));
-
-  if (runtime === 'extension' && next.transport !== before.transport) {
-    fellBack = false;
-    switchTransport(next.transport === 'bridge' ? 'bridge' : 'direct');
-    void connect();
-  }
 }
 
 export function setUi(patch: Partial<AppState['ui']>): void {
   store.set((s) => ({ ...s, ui: { ...s.ui, ...patch } }));
 }
 
-export function currentMode(): TransportMode {
-  return transport.mode;
+/** Open the key form (e.g. to switch keys) and bring it into view. */
+export function openKeyEditor(): void {
+  setUi({ keyEditor: true, settingsOpen: false, sidebarOpen: false });
 }

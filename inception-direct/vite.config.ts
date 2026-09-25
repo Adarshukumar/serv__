@@ -1,114 +1,51 @@
 import react from '@vitejs/plugin-react';
-import { createReadStream, readFileSync, statSync } from 'node:fs';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string };
 
-const DEFAULT_BASE_URL = 'https://chat.inceptionlabs.ai';
-
-/** Where the dev and preview servers offer the packed extension. Keep in sync with ConnectionPanel. */
-const DOWNLOAD_PATH = '/download/inception-direct.zip';
+const DEFAULT_API_URL = 'https://api.inceptionlabs.ai';
 
 /**
- * Serves the zip made by `npm run zip` from the dev and preview servers, so the web
- * preview can hand over the ready-built extension. Build output is untouched: the
- * zip is never copied into dist/ or into the extension itself.
+ * Production builds carry a strict Content-Security-Policy: the page may load code
+ * only from itself and may talk only to itself and Inception's API. Even if some
+ * markup slipped past the sanitiser, the stored API key could not be sent anywhere
+ * else. (Dev builds skip it: Vite's dev client needs inline scripts and websockets.)
  */
-function extensionDownload(): Plugin {
-  const fileName = `inception-direct-${pkg.version}.zip`;
-  const filePath = `${root}${fileName}`;
-
-  const handler = (req: IncomingMessage, res: ServerResponse, next: (err?: unknown) => void) => {
-    // Mounted at DOWNLOAD_PATH, so req.url is what follows it. Only the exact path is ours.
-    const rest = (req.url ?? '/').split('?')[0];
-    if ((rest !== '/' && rest !== '') || (req.method !== 'GET' && req.method !== 'HEAD')) return next();
-
-    let stats: { size: number; mtime: Date };
-    try {
-      stats = statSync(filePath);
-    } catch {
-      res.statusCode = 404;
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      res.setHeader('Cache-Control', 'no-store');
-      res.end('The extension has not been packed yet. Run `npm run build && npm run zip`, then reload.\n');
-      return;
-    }
-    res.statusCode = 200;
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Length', String(stats.size));
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-    res.setHeader('Last-Modified', stats.mtime.toUTCString());
-    res.setHeader('Cache-Control', 'no-cache');
-    if (req.method === 'HEAD') {
-      res.end();
-      return;
-    }
-    createReadStream(filePath)
-      .on('error', () => res.destroy())
-      .pipe(res);
-  };
-
+function contentSecurityPolicy(apiOrigin: string): Plugin {
+  const policy = [
+    "default-src 'self'",
+    `connect-src 'self' ${apiOrigin}`,
+    "script-src 'self'",
+    // KaTeX positions glyphs with inline style attributes.
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "font-src 'self' data:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-src 'none'",
+    "worker-src 'none'",
+  ].join('; ');
   return {
-    name: 'inception-direct:download',
-    configureServer(server) {
-      server.middlewares.use(DOWNLOAD_PATH, handler);
-    },
-    configurePreviewServer(server) {
-      server.middlewares.use(DOWNLOAD_PATH, handler);
-    },
-  };
-}
-
-/**
- * Emits dist/manifest.json. Host permission, content-script match and the header
- * rule all derive from the same origin, so a test build can target a local server.
- */
-function extensionManifest(baseUrl: string): Plugin {
-  return {
-    name: 'inception-direct:manifest',
+    name: 'inception-direct:csp',
     apply: 'build',
-    generateBundle() {
-      const url = new URL(baseUrl);
-      // Chrome match patterns don't carry ports; `*://host/*` style is port-agnostic.
-      const pattern = `${url.protocol}//${url.hostname}/*`;
-      const icons = { '16': 'icons/icon-16.png', '32': 'icons/icon-32.png', '48': 'icons/icon-48.png', '128': 'icons/icon-128.png' };
-      const manifest = {
-        manifest_version: 3,
-        name: 'Mercury — Inception Direct',
-        short_name: 'Mercury',
-        version: pkg.version,
-        description: 'Mercury by Inception, typeset. Streams chat.inceptionlabs.ai right in your browser, on your own IP. No servers in between.',
-        minimum_chrome_version: '116',
-        icons,
-        action: { default_title: 'Open Mercury', default_icon: icons },
-        background: { service_worker: 'background.js', type: 'module' },
-        permissions: ['declarativeNetRequestWithHostAccess'],
-        host_permissions: [pattern],
-        content_scripts: [
-          {
-            matches: [pattern],
-            js: ['content-bridge.js'],
-            run_at: 'document_idle',
-            all_frames: false,
-          },
-        ],
-      };
-      this.emitFile({ type: 'asset', fileName: 'manifest.json', source: `${JSON.stringify(manifest, null, 2)}\n` });
+    transformIndexHtml() {
+      return [{ tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: policy }, injectTo: 'head-prepend' }];
     },
   };
 }
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, root, 'VITE_');
-  const baseUrl = (env.VITE_INCEPTION_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  const apiUrl = (process.env.VITE_INCEPTION_API_URL || env.VITE_INCEPTION_API_URL || DEFAULT_API_URL).replace(/\/+$/, '');
   const allowedHosts = process.env.VITE_ALLOWED_HOSTS?.split(',').map((h) => h.trim()).filter(Boolean);
 
   return {
     base: './',
-    plugins: [react(), extensionManifest(baseUrl), extensionDownload()],
+    plugins: [react(), contentSecurityPolicy(new URL(apiUrl).origin)],
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
     },
@@ -123,21 +60,10 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: 'dist',
       emptyOutDir: true,
-      target: 'chrome116',
+      target: ['chrome111', 'edge111', 'firefox114', 'safari16.4'],
       sourcemap: false,
       modulePreload: { polyfill: false },
       chunkSizeWarningLimit: 1200,
-      rolldownOptions: {
-        input: {
-          index: `${root}index.html`,
-          background: `${root}src/extension/background.ts`,
-        },
-        output: {
-          entryFileNames: (chunk) => (chunk.name === 'background' ? 'background.js' : 'assets/[name]-[hash].js'),
-          chunkFileNames: 'assets/[name]-[hash].js',
-          assetFileNames: 'assets/[name]-[hash][extname]',
-        },
-      },
     },
   };
 });

@@ -1,122 +1,129 @@
-import { SEARCH_ERROR_MARKER, SEARCHING_MARKER } from './config';
+/**
+ * Typed events from the API's server-sent `chat.completion.chunk` stream
+ * (OpenAI-compatible, plus Inception's extensions):
+ *
+ *   data: {"id":…,"object":"chat.completion.chunk","model":"mercury-2.5",
+ *          "choices":[{"index":0,"delta":{"content":"…"},"finish_reason":null}]}
+ *   …
+ *   data: {…,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],
+ *          "reasoning_summary":{"content":"…","status":"complete"}}
+ *   data: {…,"choices":[],"usage":{…}}          ← with stream_options.include_usage
+ *   data: [DONE]
+ *
+ * In diffusing mode (`diffusing: true`) every chunk's `delta.content` is the *whole*
+ * text at that denoising step, so it replaces what came before instead of appending.
+ */
 
-export interface Source {
-  id: string;
-  url: string;
-  title: string;
+export interface Usage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  /** Part of completionTokens spent on reasoning. */
+  reasoningTokens: number;
+  /** Part of promptTokens served from the prefix cache. */
+  cachedTokens: number;
 }
 
-/**
- * Typed events produced from the server's UI-message stream (Vercel AI SDK v5 format).
- *
- * Python's `chat()` mixed reasoning, a JSON blob of sources and the answer into one
- * string stream with no markers, silently dropped `error` events, and kept only the
- * first source. Here every kind of data gets its own event.
- */
+export interface ReasoningSummary {
+  content: string;
+  status: 'complete' | 'unavailable' | 'skipped';
+}
+
+export type FinishReason = 'stop' | 'length' | 'tool_calls' | 'content_filter' | (string & {});
+
 export type StreamEvent =
-  | { type: 'start'; messageId?: string }
-  | { type: 'reasoning-delta'; delta: string }
-  | { type: 'text-delta'; delta: string }
-  | { type: 'source'; source: Source }
-  /** The server is running a web search (the `__searching__` placeholder source). */
-  | { type: 'searching' }
-  /** Web search failed; the answer continues without it. */
-  | { type: 'search-error' }
-  | { type: 'error'; message: string }
-  | { type: 'finish'; finishReason?: string }
-  | { type: 'abort' }
+  /** Which response this is (sent once, from the first chunk). */
+  | { type: 'meta'; id?: string; model?: string }
+  /** Normal streaming: a block of new text to append. */
+  | { type: 'delta'; text: string }
+  /** Diffusing mode: the full text at this denoising step. */
+  | { type: 'canvas'; text: string }
+  | { type: 'reasoning-summary'; summary: ReasoningSummary }
+  | { type: 'usage'; usage: Usage }
+  | { type: 'finish'; reason: FinishReason }
+  /** e.g. "temperature reset to the model default". */
+  | { type: 'warning'; message: string }
+  /** An error object sent inside the stream. */
+  | { type: 'error'; message: string; code?: string }
   /** The literal `[DONE]` terminator. */
   | { type: 'done' };
 
-function str(value: unknown): string {
-  return typeof value === 'string' ? value : value == null ? '' : String(value);
+export type StreamMode = 'append' | 'replace';
+
+function num(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-/** Map one SSE `data` payload to a typed event, or `null` for events we don't need. */
-export function parseStreamPayload(data: string): StreamEvent | null {
+export function parseUsage(value: unknown): Usage | null {
+  if (!value || typeof value !== 'object') return null;
+  const u = value as Record<string, unknown>;
+  if (typeof u.prompt_tokens !== 'number' && typeof u.completion_tokens !== 'number') return null;
+  const completionDetails = (u.completion_tokens_details ?? {}) as Record<string, unknown>;
+  const promptDetails = (u.prompt_tokens_details ?? {}) as Record<string, unknown>;
+  const promptTokens = num(u.prompt_tokens);
+  const completionTokens = num(u.completion_tokens);
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: num(u.total_tokens) || promptTokens + completionTokens,
+    reasoningTokens: num(completionDetails.reasoning_tokens) || num(u.reasoning_tokens),
+    cachedTokens: num(promptDetails.cached_tokens) || num(u.cached_input_tokens),
+  };
+}
+
+function parseSummary(value: unknown): ReasoningSummary | null {
+  if (!value || typeof value !== 'object') return null;
+  const s = value as Record<string, unknown>;
+  const content = typeof s.content === 'string' ? s.content : '';
+  const status = s.status === 'complete' || s.status === 'skipped' ? s.status : content ? 'complete' : 'unavailable';
+  return { content, status };
+}
+
+/** Map one SSE `data` payload to the events it carries (a chunk can carry several). */
+export function parseChunk(data: string, mode: StreamMode): StreamEvent[] {
   const trimmed = data.trim();
-  if (!trimmed) return null;
-  if (trimmed === '[DONE]') return { type: 'done' };
+  if (!trimmed) return [];
+  if (trimmed === '[DONE]') return [{ type: 'done' }];
 
   let obj: Record<string, unknown>;
   try {
     const parsed: unknown = JSON.parse(trimmed);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return [];
     obj = parsed as Record<string, unknown>;
   } catch {
-    return null;
+    return [];
   }
 
-  switch (obj.type) {
-    case 'start':
-      return { type: 'start', messageId: str(obj.messageId) || undefined };
+  if (obj.error) {
+    const e = obj.error as Record<string, unknown> | string;
+    const message = typeof e === 'string' ? e : typeof e.message === 'string' && e.message ? e.message : 'The model reported an error.';
+    const code = typeof e === 'object' && typeof e.code === 'string' ? e.code : undefined;
+    return [{ type: 'error', message, code }];
+  }
 
-    case 'reasoning-delta':
-    case 'reasoning': {
-      const delta = str(obj.delta ?? obj.text ?? obj.textDelta);
-      return delta ? { type: 'reasoning-delta', delta } : null;
+  const out: StreamEvent[] = [];
+  if (typeof obj.id === 'string' || typeof obj.model === 'string') {
+    out.push({ type: 'meta', id: typeof obj.id === 'string' ? obj.id : undefined, model: typeof obj.model === 'string' ? obj.model : undefined });
+  }
+  if (typeof obj.warning === 'string' && obj.warning.trim()) out.push({ type: 'warning', message: obj.warning.trim() });
+
+  const choices = Array.isArray(obj.choices) ? (obj.choices as Record<string, unknown>[]) : [];
+  const choice = choices.find((c) => c && (c.index ?? 0) === 0) ?? choices[0];
+  if (choice && typeof choice === 'object') {
+    const delta = (choice.delta ?? choice.message) as Record<string, unknown> | undefined;
+    const content = delta?.content;
+    if (typeof content === 'string') {
+      if (mode === 'replace') out.push({ type: 'canvas', text: content });
+      else if (content) out.push({ type: 'delta', text: content });
     }
-
-    case 'text-delta':
-    case 'text': {
-      const delta = str(obj.delta ?? obj.text ?? obj.textDelta);
-      return delta ? { type: 'text-delta', delta } : null;
+    if (typeof choice.finish_reason === 'string' && choice.finish_reason) {
+      out.push({ type: 'finish', reason: choice.finish_reason });
     }
-
-    case 'source-url':
-    case 'source': {
-      const id = str(obj.sourceId ?? obj.id);
-      const title = str(obj.title);
-      const url = str(obj.url);
-      // The web app checks `title`; older builds used `sourceId`. Accept both.
-      if (title === SEARCHING_MARKER || id === SEARCHING_MARKER) return { type: 'searching' };
-      if (title === SEARCH_ERROR_MARKER || id === SEARCH_ERROR_MARKER) return { type: 'search-error' };
-      if (!url) return null;
-      return { type: 'source', source: { id: id || url, url, title } };
-    }
-
-    case 'error':
-      return { type: 'error', message: str(obj.errorText ?? obj.error ?? obj.message) || 'The model reported an error.' };
-
-    case 'finish':
-      return { type: 'finish', finishReason: str(obj.finishReason) || undefined };
-
-    case 'abort':
-      return { type: 'abort' };
-
-    default:
-      // start-step, finish-step, text-start/end, reasoning-start/end, message-metadata,
-      // data-*, tool-* … carry nothing the UI needs.
-      return null;
-  }
-}
-
-/** Keeps sources unique by URL, preserving arrival order. */
-export class SourceCollector {
-  private readonly byUrl = new Map<string, Source>();
-
-  add(source: Source): boolean {
-    const key = normaliseUrl(source.url);
-    const existing = this.byUrl.get(key);
-    if (existing) {
-      if (!existing.title && source.title) existing.title = source.title;
-      return false;
-    }
-    this.byUrl.set(key, { ...source });
-    return true;
   }
 
-  list(): Source[] {
-    return [...this.byUrl.values()];
-  }
-}
-
-function normaliseUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    u.hash = '';
-    return u.toString().replace(/\/$/, '');
-  } catch {
-    return url.trim();
-  }
+  const summary = parseSummary(obj.reasoning_summary);
+  if (summary) out.push({ type: 'reasoning-summary', summary });
+  const usage = parseUsage(obj.usage);
+  if (usage) out.push({ type: 'usage', usage });
+  return out;
 }

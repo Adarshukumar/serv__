@@ -70,7 +70,7 @@ export function Sidebar() {
         </nav>
 
         <footer className="sidebar-foot">
-          <p>No servers in between: your browser talks to Inception directly. Chats stay on this device.</p>
+          <p>No servers in between: this page talks to Inception’s API directly, over your own connection. Chats and key stay on this device.</p>
           <p className="sidebar-version">v{VERSION}</p>
         </footer>
       </aside>

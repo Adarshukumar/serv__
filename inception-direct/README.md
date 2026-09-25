@@ -1,214 +1,209 @@
 # Mercury · Inception Direct
 
-A typographic chat for **Mercury**, Inception's diffusion language model, that talks to
-**chat.inceptionlabs.ai straight from your own browser**:
+A typographic chat for **Mercury**, Inception's diffusion language model. It is a **plain
+website**, with no server, proxy or browser extension. It talks to **Inception's official API
+straight from your own browser**:
 
-- no server of ours and no proxy
-- your own IP and your own browser session
-- every word is streamed live from the model and typeset as it arrives
+- every request goes from your browser to `api.inceptionlabs.ai`, on your own connection and IP
+- the session is checked the moment the page opens; after that everything just runs
+- every word is streamed live from the model and typeset as it arrives (nothing canned)
+- it builds to static files, so any web host (or `npm start` on your own machine) can serve it
 
-It is a TypeScript port of `My PREVIOUS ENTIRE SERVER/API/providers/Inception.py`. The
-Python provider ran on a server through a hard-coded proxy. This version moves the whole
-thing into the browser and fixes the provider's bugs (see [What changed](#what-changed-from-inceptionpy)).
+It started as a TypeScript port of `My PREVIOUS ENTIRE SERVER/API/providers/Inception.py`
+(see [What changed](#what-changed-from-inceptionpy)).
 
 ---
 
-## Why it is a browser extension
-
-A normal web page **cannot** do this. When a page on one site calls
-`chat.inceptionlabs.ai`, the browser blocks the call (CORS). The site also sits behind
-**Vercel's bot checkpoint**, which only lets real browsers through. A plain request from a
-server gets `429` + `x-vercel-mitigated: challenge` (checked on 2026-09-24).
-
-An **extension page** is allowed to make those requests. Chrome's documentation:
-
-> Requests from an extension to a third-party are treated as same-site if the extension has
-> host permissions for the third-party.
-
-So the extension's chat page calls Inception directly, and the browser attaches the site's
-own cookies, including the checkpoint clearance. Every request leaves your computer,
-from your IP, just as if you were using chat.inceptionlabs.ai yourself.
-
-Works in Chromium browsers: Chrome, Edge, Brave, Arc, Opera and Vivaldi (version 116 or newer).
-
-## Install
+## Quick start
 
 ```bash
 cd inception-direct
 npm install
-npm run build          # type-check + build the extension into dist/
+npm start            # builds, then serves the site at http://localhost:4173
 ```
 
-1. Open `chrome://extensions` (or `edge://extensions`).
-2. Turn on **Developer mode**.
-3. Click **Load unpacked** and choose the `inception-direct/dist` folder.
-4. Click the **Mercury** icon in the toolbar. The chat opens in a tab, and the session is created right away.
+Open the page, paste your **Inception API key** once, and chat.
 
-To update later, run `npm run build` again and press the reload icon on the extension card.
-`npm run zip` packs `dist/` into `inception-direct-<version>.zip` if you want to share it.
+**No key yet?** Create one at [platform.inceptionlabs.ai](https://platform.inceptionlabs.ai/dashboard/api-keys).
+Every new account gets **100 million free tokens, with no card needed** (per Inception's Quick Start).
+The key is stored only in your browser: in `localStorage` if you tick *Remember on this device*,
+otherwise just for the tab. It is sent only to `api.inceptionlabs.ai`.
 
-### Or: grab it from a running preview
+### Put it online
 
-```bash
-npm run build && npm run zip && npm run preview -- --host 0.0.0.0
-```
+`npm run build` writes a static site to `dist/`. Upload that folder to any static host, such as
+Netlify, Vercel, Cloudflare Pages, GitHub Pages, or nginx. It needs no backend or environment
+variables. Every visitor uses their own key in their own browser.
 
-The preview is the same UI served as a plain web page, so it can't chat (see above). Instead it
-offers a **Download the extension** button: download it, unzip it, and **Load unpacked** the
-unzipped folder. The zip is served by the preview server only; it is never copied into `dist/`.
+Behind a proxied or custom host during development, allow the host explicitly:
+`VITE_ALLOWED_HOSTS=.example.com npm run preview -- --host 0.0.0.0`.
+
+## Why the official API (and why no extension)
+
+A web page may only read responses from another site if that site allows it (CORS).
+
+| | `chat.inceptionlabs.ai` (Inception's own chat site) | `api.inceptionlabs.ai` (the official API) |
+| --- | --- | --- |
+| Other websites may call it | **No**: no CORS headers, and a Vercel bot checkpoint (`429` + `x-vercel-mitigated: challenge`) | **Yes**: it reflects the page's `Origin` in `Access-Control-Allow-Origin` |
+| Built for apps | No, it is a private backend of their web app | Yes: OpenAI-compatible, documented, with an official browser-capable SDK |
+| Needs | A real browser session on their site | An API key (free tier: 100M tokens) |
+
+Version 1 of this project reached the chat site through a browser extension. Version 2 uses the
+official API, so it runs as an ordinary website with nothing to install. The CORS behaviour
+was checked on 2026-09-25 against the live API: responses and a bare `OPTIONS` both carry the
+reflected origin. Inception's TypeScript SDK also lists web browsers as supported; in a browser
+it sends custom `X-Inception-*` headers, which only works if preflights are allowed.
 
 ## How it works
 
 ```
-open the page ──► GET /api/session ──► token + session cookie (stored by the browser)
-                        │
-                        ├── every 10 min while the page is visible: new token
-                        │   (the web app itself renews every 13 min; we renew a bit earlier)
-                        │
-you send ───────► POST /api/chat  (x-session-token, your history, thinking mode, web search)
-                        │
-                        ◄── Server-Sent Events: thinking · sources · answer tokens · finish
-                        │
-                        └── POST /api/follow-ups ──► suggested next questions (from the server)
+open the page ─► key saved? ── no ──► key card (paste once; kept in this browser)
+                    │ yes
+                    ▼
+     handshake: one real, minimal completion (≈15 tokens)
+     ─ proves CORS + key + credit + model in one round trip ─► Live · 212 ms
+                    │
+     send ─► POST /v1/chat/completions (stream) ─► blocks of text appear as they decode
+               │   429 / 5xx before the first byte → exponential backoff (1 s, 2 s, 4 s) with a visible note
+               │   401 → the key card comes back · 402 → billing notice · offline → reconnects when back online
+               ▼
+     finish ─► reasoning summary · token usage · tok/s ─► follow-ups (a small structured-output request)
 ```
 
-Recovery, all automatic:
+- **Diffusion view** (the *Diffuse* toggle) sends `diffusing: true`. The API then streams the
+  *whole* text at every denoising step. The page redraws it in place and inks the words that
+  changed since the previous frame, so you watch the answer settle out of noise. When it
+  finishes, the typeset answer replaces the canvas.
+- **Timeouts:** a request whose headers take more than 120 s, or a stream that goes silent
+  for 90 s, is ended with a clear message. A stream that ends without `finish_reason` or
+  `[DONE]` is reported as cut off. The partial answer is kept either way.
+- **Retry and Rewrite** re-run an answer with the current settings. An answer that failed
+  because of a bad key or missing credit is retried automatically once that's fixed.
 
-| What happens | What the app does |
-| --- | --- |
-| Security checkpoint (`429` + `x-vercel-mitigated: challenge`) | Shows **Run the security check**. It opens chat.inceptionlabs.ai in a tab, where your browser passes the check. The tab closes by itself when the site answers, and the failed message is retried. |
-| `429` rate limit | Retries after 1.5 s, then after 3 s, like the web app does. |
-| `401`/`403` | Creates a new session once and retries. |
-| Direct calls refused (Automatic mode) | Switches to the **site-tab route**. The request runs *inside* a chat.inceptionlabs.ai tab through a small content script, so it is truly same-origin. It still runs only in your browser. |
-| Connection lost / offline | Shows **Reconnect**, and reconnects by itself when the browser comes back online. |
+## Protocol notes (from docs.inceptionlabs.ai + the OpenAPI spec)
 
-**Header rule.** A `declarativeNetRequest` rule gives the extension's own requests to
-`chat.inceptionlabs.ai/api/*` the site's `Origin` and `Referer`, which are the same values the web app
-sends. The rule is limited to requests made *by this extension* (`initiatorDomains: [extension id]`).
-It never touches requests from web pages.
+- **Models:** `GET /v1/models` is public and returns id, name, context length, maximum output
+  and pricing. It currently lists `mercury-2.5` (260K context, $0.04 / $0.15 per M tokens) and
+  `mercury-2` (128K). The app falls back to that built-in list if the request fails.
+- **Chat:** `POST /v1/chat/completions` with `Authorization: Bearer <key>`. The body is
+  `model`, `messages` (custom instructions go in a real `system` message), `stream: true`,
+  `stream_options.include_usage`, `reasoning_effort` (`instant`/`low`/`medium`/`high`) and
+  `max_completion_tokens` (4K / 16K / 64K, capped at the model's maximum). `diffusing` and
+  `reasoning_summary` are added when turned on. Only documented parameters are sent.
+- **Stream:** SSE `chat.completion.chunk` objects with `choices[0].delta.content`, then a
+  final chunk with `finish_reason` and `reasoning_summary`, then a usage chunk
+  (`choices: []`), then `data: [DONE]`. Errors inside the stream arrive as `{ "error": { … } }`.
+- **Errors:** `{ "error": { message, type, param, code } }`: 400 invalid (for example
+  `context_length_exceeded`), 401 key, 402 billing, 404 model, 429 rate limit, 500/503.
+- **Rate limits (free tier):** 1,000 requests, 1M input tokens and 100K output tokens per minute.
 
 ## The typography UI
 
-- **Typefaces:** Fraunces for display type, Newsreader for reading (or Inter, if you prefer sans), Inter small caps for labels, and JetBrains Mono for code. All fonts are bundled, so nothing is downloaded from font CDNs.
-- **Conversation layout:** your question is set in large italic display type, like an interview. Answers are set in book type at a comfortable measure, with old-style figures, balanced headings, hanging punctuation, optional drop caps, and an asterism (⁂) between exchanges.
-- **Streaming:** a caret sits after the last word while tokens arrive. **Thinking** appears as a collapsible note with a live one-line ticker. **Sources** are listed like footnotes, deduplicated. **Follow-ups** come from the server.
-- **Markdown:** tables, task lists, highlighted code with copy buttons, and TeX math via KaTeX. The math parser is strict, so "$5 and $10" stays text.
+- **Typefaces:** Fraunces for display, Newsreader for reading (or Inter), Inter small caps
+  for labels, and JetBrains Mono for code. All fonts are bundled, so nothing loads from font CDNs.
+- **Layout:** your question is set in large italic display type, like an interview. Answers
+  are book-set at a comfortable measure, with old-style figures, balanced headings, optional
+  drop caps, and an asterism (⁂) between exchanges.
+- **While Mercury works:**
+  - a live *Thinking 0.8 s* timer runs until the first block arrives;
+  - a caret follows the text as it streams in;
+  - *Thought for 0.4 s · 312 reasoning tokens* is shown, with the reasoning summary as italic marginalia;
+  - every answer carries a colophon: words · tokens · tok/s · first word · total time.
+- **Markdown:** tables, task lists, highlighted code with copy buttons, and TeX maths via
+  KaTeX (strict, so "$5 and $10" stays text). Images become links instead of loading.
 - **Controls:**
-  - Paper and Night themes
-  - reading size from 15 to 24 px
-  - thinking mode: Instant, Low, Medium or High
-  - web search on or off
-  - custom instructions
-  - keyboard: `Enter` sends, `Shift+Enter` adds a new line, `Esc` stops, `Ctrl/⌘+Shift+O` starts a new chat
-- **Storage:** conversations are saved in your browser (IndexedDB) and nowhere else.
-
-## Protocol notes
-
-Taken from the live web app's own client code on **2026-09-24**. It is a Next.js app that uses the
-Vercel AI SDK.
-
-- **Session:** `GET /api/session` returns `{ "ok": true, "token": "<unix>.<32 hex>.<64 hex>" }` and sets a session cookie. The web app renews it every 780 000 ms and sends it as `x-session-token`.
-- **Chat:** `POST /api/chat` with the body below. `messages` is a list of `{ id, role, parts: [{ type: "text", text }] }`; assistant parts also have `state: "done"`.
-  ```json
-  { "reasoningEffort": "instant|low|medium|high", "webSearchEnabled": true, "voiceMode": false,
-    "timezone": "Asia/Calcutta", "id": "<chat id>", "messages": [...], "trigger": "submit-message" }
-  ```
-- **Stream:** SSE lines of the form `data: {json}`, in the AI SDK UI-message format:
-  - `reasoning-delta`
-  - `text-delta`
-  - `source-url`. A source titled `__searching__` means a search is running; `__search_error__` means the search failed.
-  - `error`
-  - `finish`
-  - the stream ends with `data: [DONE]`
-- **Follow-ups:** `POST /api/follow-ups` with `{ messages: [{ role, parts }] }` returns `{ follow_ups: [...] }`.
-- **No system role:** custom instructions are prepended to the first user message as `[SYSTEM INSTRUCTION] …`. This is the same approach the Python provider used.
-
-This is the web app's *internal* API, not a published one, so it can change without notice.
-All protocol details live in `src/core/config.ts`.
+  - model, thinking effort (Instant · Low · Medium · High), diffusion view, reasoning summary, follow-ups, length limit and custom instructions;
+  - Paper, Night or System theme, and a reading size of 15–24 px;
+  - `Enter` sends, `Shift+Enter` adds a new line, `Esc` stops, and `Ctrl/⌘+Shift+O` starts a new chat.
+- **Storage:** conversations stay in your browser (IndexedDB) and nowhere else.
 
 ## What changed from Inception.py
 
 | Inception.py | Here |
 | --- | --- |
-| Runs on a server, through a hard-coded proxy (`217.217.249.160:8080`) | Runs in your browser, on your IP. No proxy. |
-| `cloudscraper`, which cannot pass Vercel's current checkpoint | A real browser passes it; the app detects the checkpoint and walks you through it |
-| Refreshed the token every 90 s from a background thread | Renews every 10 min (the site uses 13), right before sending if needed, and once on 401/403 |
-| Reasoning, a JSON blob of sources, and the answer mixed into one text stream | Typed events: reasoning, text, source, searching, error, finish |
-| Kept only the **first** web source | Keeps every source, deduplicated by URL |
+| Ran on a server, through a hard-coded proxy (`217.217.249.160:8080`) | Runs in your browser, on your connection. No proxy, no server. |
+| Scraped the chat site with `cloudscraper`, which can't pass its current Vercel checkpoint | Uses the official API, which is built for this and allows browser calls |
+| Refreshed a site token every 90 s from a background thread | One handshake when the page opens; the key needs no refreshing |
+| Reasoning, a JSON blob of sources, and the answer mixed into one text stream | Typed events: text, diffusion canvas, reasoning summary, usage, finish, warning and error |
 | Dropped `error` events silently | Shows them on the message, keeping the partial answer |
-| Decoded each network chunk separately, so split characters became `���` | Streaming UTF-8 decoder; tested byte by byte with Devanagari and emoji |
-| `reasoningEffort` hard-coded to `"high"`; no `timezone` | All four thinking modes; sends `timezone` like the web app |
-| Shared state across calls, a fixed conversation id, and instances kept alive by `atexit` | Per-conversation ids and history; a request can be cancelled at any time with `AbortController` |
+| Decoded each network chunk separately, so split characters became `���` | Streaming UTF-8 decoder, tested byte by byte with Devanagari and emoji |
+| `reasoningEffort` hard-coded to `"high"` | All four efforts, per message |
+| A fixed conversation id and shared state; instances kept alive by `atexit` | Per-conversation history; any request can be cancelled with `AbortController` |
 | A 1.5–4 s sleep before every token fetch | No artificial delays |
 
 ## Privacy and security
 
-- **Network:** the only host this app contacts is chat.inceptionlabs.ai. Fonts are bundled. Images in answers become links instead of being loaded, so no third-party requests happen.
-- **Model output:** it is sanitized with DOMPurify before it is shown (no scripts, event handlers, iframes, or `javascript:` links).
-- **Content script:** it only runs *same-origin* requests for the extension and does nothing until the extension asks. Web pages cannot talk to it.
-- **Permissions:** host access to `chat.inceptionlabs.ai` and `declarativeNetRequestWithHostAccess`. Nothing else.
+- **Network:** the page contacts one host, `api.inceptionlabs.ai`. Fonts and scripts are
+  bundled, and images in answers become links instead of loading.
+- **Content-Security-Policy:** production builds pin that in the browser. `connect-src` is
+  `'self'` plus the API only, and there are no inline scripts. Even if some markup slipped
+  past the sanitiser, the stored key could not be sent anywhere else. The e2e test checks
+  this by trying to `fetch` another host from the built page.
+- **Model output:** it is sanitised with DOMPurify before it is shown (no scripts, event
+  handlers, iframes, or `javascript:` links).
+- **The key:** it is kept in your browser only, and shown masked (`sk_l…9fQ2`) in the UI.
+  **Settings → Forget key** erases it.
 
 ## Development
 
 ```bash
-npm run dev          # the UI as a normal web page (http://localhost:5173)
+npm run dev          # dev server with hot reload (http://localhost:5173)
 npm test             # unit + integration tests (Vitest)
 npm run typecheck    # TypeScript 7
-npm run build        # type-check + extension build into dist/
+npm run build        # type-check + production build into dist/
 npm run check        # all of the above
-npm run zip          # pack dist/ into inception-direct-<version>.zip
-npm run preview      # serve dist/ as a web page (http://localhost:4173), with the zip as a download
-CHROME_PATH=/path/to/chrome npm run test:e2e   # drive the real UI in Chromium, with screenshots
+npm run preview      # serve dist/ (http://localhost:4173)
+npm start            # build + preview
+CHROME_PATH=/path/to/chrome npm run test:e2e   # drive the real site in Chromium, with screenshots
 ```
-
-As a normal web page (`npm run dev` or `npm run preview`), the app really tries to create the
-session from your browser and shows why it can't reach Inception from there, plus how to
-install the extension (with a download button once `npm run zip` has run). Nothing is faked.
-Behind a proxied host, allow it with `VITE_ALLOWED_HOSTS=.example.com npm run preview`.
 
 ```
 src/
-  core/        framework-free client, the actual port of Inception.py
-    config.ts      protocol constants (endpoints, header, thinking modes)
-    session.ts     SessionManager: create, single-flight, freshness, reset
-    client.ts      InceptionClient.chat() → async stream of typed events; followUps()
+  core/        framework-free client for Inception's API
+    config.ts      endpoints, models, efforts, limits, retry and timeout policy
+    client.ts      InceptionClient: chat() → async stream of typed events; verify(), models(), followUps()
     sse.ts         incremental, spec-compliant SSE decoder
-    events.ts      stream payload → typed events; SourceCollector
-    messages.ts    history → the web app's message format; request body
-    http.ts        checkpoint detection, error mapping, abortable sleep
-  platform/    how requests leave the browser
-    transport.ts   direct · site tab · web
-    headerRules.ts Origin/Referer rule for the extension's own requests
-    bridge.ts      site-tab bridge (app side)
-    siteTab.ts     probing tabs, the security-check flow
-  extension/
-    background.ts  service worker: toolbar button, installs the header rule
-    content-bridge.ts  content script on chat.inceptionlabs.ai (probe + same-origin fetch)
+    events.ts      chat.completion.chunk → typed events (append vs. diffusing replace)
+    messages.ts    history → API messages; request bodies; follow-up parsing
+    http.ts        error mapping, backoff, abort-aware sleep, linked abort signals
+    errors.ts      InceptionError with a `kind` the UI acts on
   app/         React UI: controller.ts runs the flow; components/ and styles/ are the typography
-tests/         Vitest suites, a local protocol simulator (tests only), and the browser E2E script
+    diffusion.ts   word-by-word canvas diff for the diffusion view
+tests/         Vitest suites, a strict local API simulator (tests only), and the browser E2E script
 ```
 
 ### Tests
 
-The suites cover:
-- **Protocol handling:** SSE parsing at every possible chunk boundary, UTF-8 split byte by byte, event mapping, and the message format.
-- **Session behaviour:** single-flight, freshness, the checkpoint, and 429/401 recovery.
-- **Streaming and control:** streaming, aborting, and dropped connections.
-- **Extension glue:** the header rule, the site-tab bridge talking to the real content script through simulated ports, and the security-check flow.
-- **Markdown:** rendering and sanitizing.
+- **Unit and integration (Vitest):**
+  - SSE parsing at every chunk boundary, including UTF-8 split byte by byte;
+  - chunk → event mapping, and the diffusion canvas diff;
+  - request bodies and follow-up parsing;
+  - backoff on 429/503, and every error kind (401, 402, 404, 400, network, cut-off, idle and response timeouts, abort);
+  - key and settings storage;
+  - CORS preflight behaviour.
+- **Browser E2E (real Chromium):** runs against the simulator on another origin, so the
+  browser enforces CORS and sends real preflights. It covers:
+  - the key card (a wrong key, then the right one);
+  - the handshake, streaming, maths and code, and follow-ups with full history;
+  - model, effort and length settings, and the diffusion view;
+  - stop, stream errors, and rate-limit backoff;
+  - persistence and reload, themes, and mobile;
+  - no credit, and forgetting the key;
+  - a production build under its CSP.
 
-The integration and browser tests use `tests/fixtures/mock-inception.mjs`, a local
-**protocol simulator** that speaks the same wire format as the site. It exists only for tests, and the app never uses it.
+`tests/fixtures/mock-inception.mjs` is a strict **simulator of the official API** (same wire
+format and CORS behaviour, and unknown parameters are refused). It exists only for tests; the
+app never uses it.
 
 ## Troubleshooting
 
-- **"Security check" never finishes:** look at the chat.inceptionlabs.ai tab. Some checks need a click. The tab closes by itself once the site answers.
-- **Rate limited:** Inception limits requests per IP. Wait a moment and retry.
-- **"Via site tab" in the status:** direct calls were refused, so the app is routing through a chat.inceptionlabs.ai tab. You can pick the route in **Settings → Connection**.
-- **Firefox:** not supported yet. It needs a different background-script setup.
+- **"That key didn't work."** Inception returned 401. Create a new key at platform.inceptionlabs.ai and paste it again.
+- **"Needs credit."** Inception returned 402. The free tokens are used up, or billing is inactive.
+- **"Can't reach api.inceptionlabs.ai."** Check your connection. A content blocker, VPN or firewall that blocks `api.inceptionlabs.ai` has the same effect.
+- **Rate limited:** the app waits and retries by itself, and shows it's doing so.
+- **"Reached the length limit":** ask Mercury to continue, or raise the limit in Settings.
 
 ## Disclaimer
 
-This is an unofficial client for Inception's public chat website, for personal use. Please respect
-Inception's [terms of use](https://www.inceptionlabs.ai/docs/terms-of-use). For apps and automation,
-Inception offers an official API with keys at [platform.inceptionlabs.ai](https://platform.inceptionlabs.ai).
+This is an unofficial client for Inception's official API. Your use of the API is governed by
+Inception's [terms of use](https://docs.inceptionlabs.ai/support/tou) and your own account.

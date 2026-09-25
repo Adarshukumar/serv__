@@ -41,8 +41,17 @@ export function App() {
         <TopBar />
         <div className="scroller" ref={scroller}>
           <div className={hasMessages ? 'column' : 'column column--empty'}>
-            <ConnectionPanel />
-            {hasMessages ? <Conversation scroller={scroller} /> : <Masthead />}
+            {hasMessages ? (
+              <>
+                <ConnectionPanel />
+                <Conversation scroller={scroller} />
+              </>
+            ) : (
+              <>
+                <Masthead />
+                <ConnectionPanel />
+              </>
+            )}
           </div>
         </div>
         <Composer />

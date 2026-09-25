@@ -75,14 +75,35 @@ export const ArrowDownIcon = (p: IconProps) => (
     <path d="M12 5v14M6 13l6 6 6-6" />
   </Svg>
 );
-export const GlobeIcon = (p: IconProps) => (
+export const KeyIcon = (p: IconProps) => (
   <Svg {...p}>
-    <circle cx="12" cy="12" r="8.5" />
-    <path d="M3.5 12h17M12 3.5c2.5 2.6 3.7 5.4 3.7 8.5s-1.2 5.9-3.7 8.5c-2.5-2.6-3.7-5.4-3.7-8.5s1.2-5.9 3.7-8.5z" />
+    <circle cx="8" cy="15" r="3.6" />
+    <path d="M10.6 12.4 19 4M15.5 7.5l2.5 2.5M13.5 9.5l1.8 1.8" />
   </Svg>
 );
-export const DownloadIcon = (p: IconProps) => (
+export const EyeIcon = (p: IconProps) => (
   <Svg {...p}>
-    <path d="M12 4v11M7 10.5l5 5 5-5M5 19.5h14" />
+    <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z" />
+    <circle cx="12" cy="12" r="2.8" />
+  </Svg>
+);
+export const EyeOffIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 4l16 16M9.9 5.8A9.8 9.8 0 0 1 12 5.5C18 5.5 21.5 12 21.5 12a17 17 0 0 1-3.2 4M6.3 7.5A16.6 16.6 0 0 0 2.5 12S6 18.5 12 18.5c1.5 0 2.9-.4 4.1-1" />
+    <path d="M10 10.2a2.8 2.8 0 0 0 3.8 3.8" />
+  </Svg>
+);
+/** Scattered noise resolving into lines of text: Mercury's diffusion, as a glyph. */
+export const DiffuseIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="4" cy="6.5" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="7.6" cy="11.8" r="1.1" fill="currentColor" stroke="none" />
+    <circle cx="4.4" cy="17" r="1.1" fill="currentColor" stroke="none" />
+    <path d="M11 7h9M11 12h9M11 17h6" />
+  </Svg>
+);
+export const ExternalIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M14 5h5v5M19 5l-8 8M17 14v4.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H10" />
   </Svg>
 );

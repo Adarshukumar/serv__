@@ -1,20 +1,22 @@
-import { DEFAULT_THINKING, isThinkingMode } from '../core/config';
+import { DEFAULT_EFFORT, DEFAULT_LENGTH_LIMIT, DEFAULT_MODEL, isReasoningEffort, LENGTH_LIMITS } from '../core/config';
 import type { Conversation, ConversationMeta, Settings } from './types';
 
 /* ───────────────────────── settings (localStorage) ───────────────────────── */
 
-const SETTINGS_KEY = 'inception-direct.settings.v1';
+const SETTINGS_KEY = 'inception-direct.settings.v2';
 
 export const DEFAULT_SETTINGS: Settings = {
-  thinking: DEFAULT_THINKING,
-  webSearch: true,
+  model: DEFAULT_MODEL,
+  effort: DEFAULT_EFFORT,
+  diffusing: false,
+  reasoningSummary: true,
+  followUps: true,
+  lengthLimit: DEFAULT_LENGTH_LIMIT,
   system: '',
   theme: 'system',
   readingSize: 19,
   readingFace: 'serif',
   dropCaps: true,
-  followUps: true,
-  transport: 'auto',
 };
 
 export function loadSettings(): Settings {
@@ -37,18 +39,80 @@ export function saveSettings(settings: Settings): void {
 
 export function sanitiseSettings(input: Partial<Settings>): Settings {
   const s = { ...DEFAULT_SETTINGS };
-  if (isThinkingMode(input.thinking)) s.thinking = input.thinking;
-  if (typeof input.webSearch === 'boolean') s.webSearch = input.webSearch;
-  if (typeof input.system === 'string') s.system = input.system.slice(0, 4000);
+  if (typeof input.model === 'string' && /^[\w.:-]{1,64}$/.test(input.model)) s.model = input.model;
+  if (isReasoningEffort(input.effort)) s.effort = input.effort;
+  if (typeof input.diffusing === 'boolean') s.diffusing = input.diffusing;
+  if (typeof input.reasoningSummary === 'boolean') s.reasoningSummary = input.reasoningSummary;
+  if (typeof input.followUps === 'boolean') s.followUps = input.followUps;
+  if (typeof input.lengthLimit === 'number' && (LENGTH_LIMITS as readonly number[]).includes(input.lengthLimit)) s.lengthLimit = input.lengthLimit;
+  if (typeof input.system === 'string') s.system = input.system.slice(0, 8000);
   if (input.theme === 'paper' || input.theme === 'night' || input.theme === 'system') s.theme = input.theme;
   if (typeof input.readingSize === 'number' && Number.isFinite(input.readingSize)) {
     s.readingSize = Math.min(24, Math.max(15, Math.round(input.readingSize)));
   }
   if (input.readingFace === 'serif' || input.readingFace === 'sans') s.readingFace = input.readingFace;
   if (typeof input.dropCaps === 'boolean') s.dropCaps = input.dropCaps;
-  if (typeof input.followUps === 'boolean') s.followUps = input.followUps;
-  if (input.transport === 'auto' || input.transport === 'direct' || input.transport === 'bridge') s.transport = input.transport;
   return s;
+}
+
+/* ───────────────────────── API key (this browser only) ───────────────────────── */
+
+const KEY_STORAGE = 'inception-direct.api-key.v1';
+
+export interface StoredKey {
+  key: string;
+  /** true → localStorage (survives restarts); false → sessionStorage (this tab only). */
+  remember: boolean;
+}
+
+/** Tidy a pasted key: drop whitespace, quotes and a leading "Bearer ". */
+export function cleanKey(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^bearer\s+/i, '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/\s+/g, '');
+}
+
+/** "sk_live_abcdef123456" → "sk_l…3456". Never shows more than 8 characters. */
+export function maskKey(key: string): string {
+  if (key.length <= 8) return '•'.repeat(Math.max(4, key.length));
+  return `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
+
+export function loadKey(): StoredKey | null {
+  try {
+    const saved = localStorage.getItem(KEY_STORAGE);
+    if (saved) return { key: saved, remember: true };
+  } catch {
+    // storage disabled
+  }
+  try {
+    const session = sessionStorage.getItem(KEY_STORAGE);
+    if (session) return { key: session, remember: false };
+  } catch {
+    // storage disabled
+  }
+  return null;
+}
+
+export function saveKey(key: string, remember: boolean): void {
+  forgetKey();
+  try {
+    (remember ? localStorage : sessionStorage).setItem(KEY_STORAGE, key);
+  } catch {
+    // storage full / disabled — the key lives in memory for this page only
+  }
+}
+
+export function forgetKey(): void {
+  for (const area of [globalThis.localStorage, globalThis.sessionStorage]) {
+    try {
+      area?.removeItem(KEY_STORAGE);
+    } catch {
+      // storage disabled
+    }
+  }
 }
 
 /* ───────────────────────── conversations (IndexedDB) ───────────────────────── */
