@@ -1,114 +1,67 @@
 import { describe, expect, it } from 'vitest';
-import {
-  buildChatRequest,
-  buildFollowUpsRequest,
-  buildHandshakeRequest,
-  parseFollowUps,
-  toApiMessages,
-  type ChatTurn,
-} from '../src/core/messages';
+import { buildChatBody, toWireMessages } from '../src/site/messages';
 
-describe('toApiMessages', () => {
-  it('sends custom instructions as a real system message, first', () => {
-    const out = toApiMessages([{ role: 'user', text: 'Hi' }], '  Be brief.  ');
-    expect(out).toEqual([
-      { role: 'system', content: 'Be brief.' },
-      { role: 'user', content: 'Hi' },
+describe('toWireMessages', () => {
+  it('produces the web app’s UI-message shape', () => {
+    const wire = toWireMessages([
+      { id: 'u1', role: 'user', text: 'Hi' },
+      { id: 'a1', role: 'assistant', text: 'Hello!' },
+      { id: 'u2', role: 'user', text: 'Thanks' },
+    ]);
+    expect(wire).toEqual([
+      { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'Hi' }] },
+      { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: 'Hello!', state: 'done' }] },
+      { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'Thanks' }] },
     ]);
   });
 
-  it('omits an empty system message', () => {
-    expect(toApiMessages([{ role: 'user', text: 'Hi' }], '   ')).toEqual([{ role: 'user', content: 'Hi' }]);
+  it('prepends custom instructions to the first user turn only', () => {
+    const wire = toWireMessages(
+      [
+        { id: 'u1', role: 'user', text: 'Question one' },
+        { id: 'a1', role: 'assistant', text: 'Answer' },
+        { id: 'u2', role: 'user', text: 'Question two' },
+      ],
+      '  Be brief.  ',
+    );
+    expect(wire[0]!.parts[0]!.text).toBe('[SYSTEM INSTRUCTION] Be brief.\n\nQuestion one');
+    expect(wire[2]!.parts[0]!.text).toBe('Question two');
   });
 
-  it('drops empty turns and merges consecutive same-role turns', () => {
-    const turns: ChatTurn[] = [
-      { role: 'user', text: 'First question' },
-      { role: 'assistant', text: '   ' }, // a failed answer
-      { role: 'user', text: 'Second question' },
-      { role: 'assistant', text: 'Answer' },
-      { role: 'user', text: 'Third' },
-    ];
-    expect(toApiMessages(turns)).toEqual([
-      { role: 'user', content: 'First question\n\nSecond question' },
-      { role: 'assistant', content: 'Answer' },
-      { role: 'user', content: 'Third' },
+  it('merges consecutive same-role turns and drops empty ones', () => {
+    const wire = toWireMessages([
+      { id: 'u1', role: 'user', text: 'First try' },
+      { id: 'a1', role: 'assistant', text: '   ' },
+      { id: 'u2', role: 'user', text: 'Second try' },
     ]);
+    expect(wire).toHaveLength(1);
+    expect(wire[0]).toEqual({ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'First try\n\nSecond try' }] });
   });
 
-  it('keeps the text exactly (no trimming inside code)', () => {
-    const text = '```\n  indented\n```\n';
-    expect(toApiMessages([{ role: 'user', text }])[0]!.content).toBe(text);
+  it('assigns ids when missing', () => {
+    const [message] = toWireMessages([{ role: 'user', text: 'x' }]);
+    expect(message!.id).toMatch(/^[0-9A-Za-z]{16}$/);
   });
 });
 
-describe('request bodies', () => {
-  const messages = [{ role: 'user' as const, content: 'Hi' }];
-
-  it('chat: streaming with usage, effort and a length budget — only documented params', () => {
-    const body = buildChatRequest({ model: 'mercury-2.5', messages, effort: 'high', diffusing: false, maxTokens: 16384, reasoningSummary: true });
+describe('buildChatBody', () => {
+  it('matches the body the web app sends to /api/chat', () => {
+    const messages = toWireMessages([{ id: 'u1', role: 'user', text: 'Hi' }]);
+    const body = buildChatBody({ chatId: 'chat123', messages, thinking: 'high', webSearch: false, timezone: 'Asia/Calcutta' });
     expect(body).toEqual({
-      model: 'mercury-2.5',
+      reasoningEffort: 'high',
+      webSearchEnabled: false,
+      voiceMode: false,
+      timezone: 'Asia/Calcutta',
+      id: 'chat123',
       messages,
-      stream: true,
-      stream_options: { include_usage: true },
-      reasoning_effort: 'high',
-      max_completion_tokens: 16384,
-      reasoning_summary: true,
+      trigger: 'submit-message',
     });
   });
 
-  it('chat: diffusing only when on; no reasoning summary for "instant"', () => {
-    const body = buildChatRequest({ model: 'mercury-2', messages, effort: 'instant', diffusing: true, maxTokens: 4096, reasoningSummary: true });
-    expect(body.diffusing).toBe(true);
-    expect('reasoning_summary' in body).toBe(false);
-    const off = buildChatRequest({ model: 'mercury-2', messages, effort: 'low', diffusing: false, maxTokens: 4096, reasoningSummary: false });
-    expect('diffusing' in off).toBe(false);
-    expect('reasoning_summary' in off).toBe(false);
-  });
-
-  it('handshake: the smallest real completion', () => {
-    expect(buildHandshakeRequest('mercury-2.5')).toEqual({
-      model: 'mercury-2.5',
-      messages: [{ role: 'user', content: 'Hi' }],
-      max_completion_tokens: 1,
-      reasoning_effort: 'instant',
-      stream: false,
-    });
-  });
-
-  it('follow-ups: structured output over a clipped transcript of the last turns', () => {
-    const long = 'x'.repeat(10_000);
-    const turns: ChatTurn[] = [
-      { role: 'user', text: 'old' },
-      { role: 'assistant', text: 'old answer' },
-      { role: 'user', text: 'Why is the sky blue?' },
-      { role: 'assistant', text: long },
-      { role: 'user', text: 'And sunsets?' },
-      { role: 'assistant', text: 'Longer path through air.' },
-    ];
-    const body = buildFollowUpsRequest('mercury-2.5', turns) as { messages: { role: string; content: string }[]; response_format: { type: string; json_schema: { name: string } } };
-    expect(body.response_format.type).toBe('json_schema');
-    expect(body.response_format.json_schema.name).toBe('follow_ups');
-    const transcript = body.messages[1]!.content;
-    expect(transcript).not.toContain('old answer'); // only the last four turns
-    expect(transcript).toContain('User: Why is the sky blue?');
-    expect(transcript.length).toBeLessThan(6_000); // long turns are clipped
-  });
-});
-
-describe('parseFollowUps', () => {
-  it('reads the structured JSON', () => {
-    expect(parseFollowUps('{"follow_ups":["What about Mars?","Why red at sunset?","Is it the same on the Moon?"]}')).toEqual([
-      'What about Mars?',
-      'Why red at sunset?',
-      'Is it the same on the Moon?',
-    ]);
-  });
-
-  it('tolerates fences, bare arrays, bullets, duplicates and junk', () => {
-    expect(parseFollowUps('```json\n["One question?", "one question?", "", 7, "Two?"]\n```')).toEqual(['One question?', 'Two?']);
-    expect(parseFollowUps('1. First thing?\n- “Second thing?”\n• Third thing?\n• Fourth thing?')).toEqual(['First thing?', 'Second thing?', 'Third thing?']);
-    expect(parseFollowUps('')).toEqual([]);
+  it('fills the timezone from Intl when not given', () => {
+    const body = buildChatBody({ chatId: 'c', messages: [], thinking: 'medium', webSearch: true });
+    expect(typeof body.timezone).toBe('string');
+    expect(body.timezone.length).toBeGreaterThan(0);
   });
 });

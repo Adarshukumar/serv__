@@ -1,85 +1,70 @@
 import { describe, expect, it } from 'vitest';
-import { parseChunk, parseUsage } from '../src/core/events';
-import { chunk, usageChunk } from './helpers';
+import { SourceCollector, parseStreamPayload } from '../src/site/events';
 
-const j = (v: unknown) => JSON.stringify(v);
+const p = (value: unknown) => parseStreamPayload(JSON.stringify(value));
 
-describe('parseChunk — chat.completion.chunk → typed events', () => {
-  it('maps content deltas, and sends meta with the first chunk', () => {
-    expect(parseChunk(j(chunk('Hello')), 'append')).toEqual([
-      { type: 'meta', id: 'chatcmpl-test', model: 'mercury-2.5' },
-      { type: 'delta', text: 'Hello' },
-    ]);
+describe('parseStreamPayload', () => {
+  it('maps text and reasoning deltas', () => {
+    expect(p({ type: 'text-delta', id: '0', delta: 'Hi' })).toEqual({ type: 'text-delta', delta: 'Hi' });
+    expect(p({ type: 'reasoning-delta', id: 'r', delta: 'hmm' })).toEqual({ type: 'reasoning-delta', delta: 'hmm' });
+    expect(p({ type: 'text-delta', id: '0', delta: '' })).toBeNull();
   });
 
-  it('ignores empty/role-only deltas in append mode', () => {
-    const events = parseChunk(j({ ...chunk(''), choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] }), 'append');
-    expect(events.filter((e) => e.type !== 'meta')).toEqual([]);
-  });
-
-  it('in diffusing (replace) mode, content is the whole canvas — even empty', () => {
-    expect(parseChunk(j(chunk('The qxz brown fox')), 'replace').filter((e) => e.type === 'canvas')).toEqual([{ type: 'canvas', text: 'The qxz brown fox' }]);
-    expect(parseChunk(j(chunk('')), 'replace').filter((e) => e.type === 'canvas')).toEqual([{ type: 'canvas', text: '' }]);
-    // A null content (e.g. the final chunk) is not a canvas.
-    expect(parseChunk(j(chunk(null, 'stop')), 'replace').some((e) => e.type === 'canvas')).toBe(false);
-  });
-
-  it('reports finish_reason, and a chunk can carry content + finish together', () => {
-    const events = parseChunk(j(chunk('end.', 'length')), 'append').filter((e) => e.type !== 'meta');
-    expect(events).toEqual([
-      { type: 'delta', text: 'end.' },
-      { type: 'finish', reason: 'length' },
-    ]);
-  });
-
-  it('reads the reasoning summary from the final chunk', () => {
-    const events = parseChunk(j(chunk(null, 'stop', { reasoning_summary: { content: 'Thought it through.', status: 'complete' } })), 'append');
-    expect(events).toContainEqual({ type: 'reasoning-summary', summary: { content: 'Thought it through.', status: 'complete' } });
-    const unavailable = parseChunk(j(chunk(null, 'stop', { reasoning_summary: { content: null, status: 'unavailable' } })), 'append');
-    expect(unavailable).toContainEqual({ type: 'reasoning-summary', summary: { content: '', status: 'unavailable' } });
-  });
-
-  it('reads the usage chunk (empty choices) including nested details', () => {
-    const events = parseChunk(j(usageChunk(100, 250, 80)), 'append');
-    expect(events).toContainEqual({
-      type: 'usage',
-      usage: { promptTokens: 100, completionTokens: 250, totalTokens: 350, reasoningTokens: 80, cachedTokens: 0 },
+  it('keeps sources and recognises the searching / search-error markers (title or sourceId)', () => {
+    expect(p({ type: 'source-url', sourceId: 's1', url: 'https://a.example/x', title: 'A' })).toEqual({
+      type: 'source',
+      source: { id: 's1', url: 'https://a.example/x', title: 'A' },
     });
-    expect(events.some((e) => e.type === 'delta' || e.type === 'finish')).toBe(false);
+    expect(p({ type: 'source-url', sourceId: 'x', url: '', title: '__searching__' })).toEqual({ type: 'searching' });
+    expect(p({ type: 'source-url', sourceId: '__searching__', url: 'about:blank', title: '' })).toEqual({ type: 'searching' });
+    expect(p({ type: 'source-url', sourceId: 'y', url: '', title: '__search_error__' })).toEqual({ type: 'search-error' });
+    expect(p({ type: 'source-url', sourceId: 'z', title: 'no url' })).toBeNull();
   });
 
-  it('accepts the flat usage fields of the non-streaming example too', () => {
-    expect(parseUsage({ prompt_tokens: 12, completion_tokens: 8, total_tokens: 20, reasoning_tokens: 3, cached_input_tokens: 2 })).toEqual({
-      promptTokens: 12,
-      completionTokens: 8,
-      totalTokens: 20,
-      reasoningTokens: 3,
-      cachedTokens: 2,
-    });
-    expect(parseUsage(null)).toBeNull();
-    expect(parseUsage({ foo: 1 })).toBeNull();
+  it('surfaces error events instead of dropping them (Python dropped them)', () => {
+    expect(p({ type: 'error', errorText: 'Model overloaded' })).toEqual({ type: 'error', message: 'Model overloaded' });
+    expect(p({ type: 'error' })).toEqual({ type: 'error', message: 'The model reported an error.' });
   });
 
-  it('surfaces warnings (e.g. temperature reset)', () => {
-    expect(parseChunk(j({ ...chunk('x'), warning: 'temperature reset to 1' }), 'append')).toContainEqual({ type: 'warning', message: 'temperature reset to 1' });
+  it('maps lifecycle events and the [DONE] terminator', () => {
+    expect(p({ type: 'start', messageId: 'm1' })).toEqual({ type: 'start', messageId: 'm1' });
+    expect(p({ type: 'finish' })).toEqual({ type: 'finish', finishReason: undefined });
+    expect(p({ type: 'abort' })).toEqual({ type: 'abort' });
+    expect(parseStreamPayload('[DONE]')).toEqual({ type: 'done' });
   });
 
-  it('turns an in-stream error object into an error event', () => {
-    expect(parseChunk(j({ error: { message: 'Engine overloaded', type: 'server_error', code: 'engine_overloaded' } }), 'append')).toEqual([
-      { type: 'error', message: 'Engine overloaded', code: 'engine_overloaded' },
-    ]);
-    expect(parseChunk(j({ error: 'plain' }), 'append')).toEqual([{ type: 'error', message: 'plain', code: undefined }]);
+  it('ignores structural and unknown events, and junk', () => {
+    for (const type of ['start-step', 'finish-step', 'text-start', 'text-end', 'reasoning-start', 'reasoning-end', 'data-usage', 'tool-input-start']) {
+      expect(p({ type })).toBeNull();
+    }
+    expect(parseStreamPayload('not json')).toBeNull();
+    expect(parseStreamPayload('[1,2]')).toBeNull();
+    expect(parseStreamPayload('')).toBeNull();
+  });
+});
+
+describe('SourceCollector', () => {
+  it('keeps every distinct source in arrival order (Python kept only the first)', () => {
+    const c = new SourceCollector();
+    c.add({ id: '1', url: 'https://a.example/one', title: 'One' });
+    c.add({ id: '2', url: 'https://b.example/two', title: 'Two' });
+    c.add({ id: '3', url: 'https://c.example/three', title: 'Three' });
+    expect(c.list().map((s) => s.title)).toEqual(['One', 'Two', 'Three']);
   });
 
-  it('handles [DONE], blanks and garbage', () => {
-    expect(parseChunk('[DONE]', 'append')).toEqual([{ type: 'done' }]);
-    expect(parseChunk('  ', 'append')).toEqual([]);
-    expect(parseChunk('{not json', 'append')).toEqual([]);
-    expect(parseChunk('[1,2]', 'append')).toEqual([]);
+  it('rejects dangerous or malformed source link schemes', () => {
+    const c = new SourceCollector();
+    expect(c.add({ id: 'x', url: 'javascript:alert(1)', title: 'bad' })).toBe(false);
+    expect(c.add({ id: 'y', url: 'data:text/html,hi', title: 'bad' })).toBe(false);
+    expect(c.add({ id: 'z', url: 'not a link', title: 'bad' })).toBe(false);
+    expect(c.add({ id: 'safe', url: 'https://example.com/', title: 'good' })).toBe(true);
+    expect(c.list()).toHaveLength(1);
   });
 
-  it('uses choice index 0', () => {
-    const payload = { ...chunk(null), choices: [{ index: 1, delta: { content: 'B' } }, { index: 0, delta: { content: 'A' } }] };
-    expect(parseChunk(j(payload), 'append').filter((e) => e.type === 'delta')).toEqual([{ type: 'delta', text: 'A' }]);
+  it('dedupes by URL (ignoring fragments and trailing slashes) and fills in missing titles', () => {
+    const c = new SourceCollector();
+    expect(c.add({ id: '1', url: 'https://a.example/page/', title: '' })).toBe(true);
+    expect(c.add({ id: '2', url: 'https://a.example/page#section', title: 'Page' })).toBe(false);
+    expect(c.list()).toEqual([{ id: '1', url: 'https://a.example/page/', title: 'Page' }]);
   });
 });

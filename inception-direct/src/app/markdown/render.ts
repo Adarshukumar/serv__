@@ -8,7 +8,7 @@ import { escapeHtml, mathExtension } from './math';
  *
  * - GFM (tables, task lists, strikethrough), TeX math via KaTeX, highlighted code.
  * - Everything is sanitised with DOMPurify: model output is untrusted, and this page
- *   holds the user's API key.
+ *   holds the local companion's write-only CSRF secret.
  * - Remote images become links: rendering them would make the browser contact
  *   arbitrary servers, which this app promises not to do.
  */

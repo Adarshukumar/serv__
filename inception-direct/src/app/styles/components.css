@@ -53,10 +53,6 @@
   color: var(--accent-ink);
 }
 
-a.button {
-  text-decoration: none;
-}
-
 .text-button {
   font-size: 0.68rem;
   font-weight: 600;
@@ -298,207 +294,6 @@ a.button {
   color: var(--ink-3);
 }
 
-/* ───────────────────────── key card ───────────────────────── */
-
-.key-card {
-  position: relative;
-  width: 100%;
-  max-width: 34rem;
-  margin: 34px auto 8px;
-  padding: 26px 28px 22px;
-  border: 1px solid var(--rule);
-  border-top: 3px solid var(--ink);
-  border-radius: 4px 4px 14px 14px;
-  background: var(--paper-raised);
-  box-shadow: var(--shadow);
-  text-align: left;
-  animation: rise 0.5s var(--ease) both;
-}
-
-.column:not(.column--empty) > .key-card {
-  margin: 0 0 36px;
-  max-width: none;
-}
-
-.key-card[data-tone='bad'] {
-  border-top-color: var(--bad);
-}
-
-.key-kicker {
-  margin: 0 0 6px;
-  color: var(--accent);
-}
-
-.key-title {
-  margin: 0 0 10px;
-  font-family: var(--font-display);
-  font-size: 1.62rem;
-  font-weight: 520;
-  line-height: 1.12;
-  letter-spacing: -0.012em;
-  font-variation-settings: 'opsz' 60, 'SOFT' 50;
-  color: var(--ink);
-}
-
-.key-lede {
-  margin: 0 0 18px;
-  font-family: var(--font-text);
-  font-size: 1.04rem;
-  line-height: 1.55;
-  color: var(--ink-2);
-  text-wrap: pretty;
-}
-
-.key-lede strong {
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.key-input {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 6px 0 14px;
-  border: 1px solid var(--rule-strong);
-  border-radius: 10px;
-  background: var(--paper);
-  color: var(--ink-3);
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.key-input:focus-within {
-  border-color: var(--ink-3);
-  box-shadow: 0 0 0 3px var(--accent-wash);
-}
-
-.key-input[data-invalid='true'] {
-  border-color: var(--bad);
-}
-
-.key-input input {
-  flex: 1;
-  min-width: 0;
-  height: 46px;
-  padding: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  font-family: var(--font-mono);
-  font-size: 0.92rem;
-  letter-spacing: 0.02em;
-  color: var(--ink);
-}
-
-.key-input input::placeholder {
-  font-family: var(--font-ui);
-  letter-spacing: 0;
-  color: var(--ink-4);
-}
-
-.key-reveal {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  color: var(--ink-3);
-}
-
-.key-reveal:hover {
-  background: var(--paper-sunk);
-  color: var(--ink);
-}
-
-.key-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 12px;
-}
-
-.key-actions {
-  display: flex;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.key-actions .button {
-  padding: 9px 18px;
-}
-
-.check {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.86rem;
-  color: var(--ink-2);
-  cursor: pointer;
-}
-
-.check input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: var(--accent);
-}
-
-.key-status,
-.key-error {
-  margin: 12px 0 0;
-  font-size: 0.88rem;
-  line-height: 1.5;
-}
-
-.key-status {
-  color: var(--ink-3);
-}
-
-.key-error {
-  padding-left: 10px;
-  border-left: 2px solid var(--bad);
-  color: var(--ink-2);
-}
-
-.key-foot {
-  margin: 18px 0 0;
-  padding-top: 14px;
-  border-top: 1px solid var(--rule);
-  font-size: 0.86rem;
-  line-height: 1.55;
-  color: var(--ink-3);
-}
-
-.key-foot a,
-.field-help a {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-weight: 600;
-  color: var(--accent);
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 0.2em;
-}
-
-@media (max-width: 520px) {
-  .key-card {
-    margin-top: 26px;
-    padding: 22px 18px 18px;
-  }
-  .key-title {
-    font-size: 1.4rem;
-  }
-  .key-actions {
-    width: 100%;
-  }
-  .key-actions .button {
-    flex: 1;
-    justify-content: center;
-  }
-}
-
 /* ───────────────────────── conversation ───────────────────────── */
 
 .conversation {
@@ -582,9 +377,8 @@ a.button {
 
 .thinking summary {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
-  gap: 2px 12px;
+  gap: 12px;
   cursor: pointer;
   list-style: none;
   padding: 2px 0;
@@ -616,8 +410,18 @@ a.button {
   transform: rotate(90deg);
 }
 
-.thinking-hint {
+.thinking-ticker {
+  min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-text);
+  font-style: italic;
+  font-size: 0.98rem;
+  color: var(--ink-3);
+}
+
+.thinking-hint {
   font-size: 0.7rem;
   color: var(--ink-4);
   letter-spacing: 0.04em;
@@ -636,77 +440,6 @@ a.button {
   line-height: 1.55;
   color: var(--ink-2);
   font-variant-numeric: oldstyle-nums;
-}
-
-.thinking-line {
-  margin: 0 0 16px;
-  font-size: 0.64rem;
-  font-weight: 650;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  font-variant-numeric: lining-nums tabular-nums;
-}
-
-.status-timer {
-  margin-left: 2px;
-  font-weight: 550;
-  letter-spacing: 0.06em;
-  color: var(--ink-4);
-  font-variant-numeric: tabular-nums;
-}
-
-.status-line--retry {
-  color: var(--wait);
-}
-
-.status-count {
-  font-weight: 550;
-  color: var(--ink-4);
-}
-
-/* Diffusion view — the canvas, refined in place */
-.canvas {
-  max-width: var(--measure);
-}
-
-.canvas-meter {
-  margin: 0 0 10px;
-  color: var(--ink-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.canvas-text {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-  font-family: var(--font-reading);
-  font-size: var(--reading-size);
-  line-height: 1.62;
-  color: var(--ink-2);
-  font-variant-numeric: oldstyle-nums proportional-nums;
-}
-
-.canvas-fresh {
-  color: color-mix(in srgb, var(--accent) 78%, var(--paper));
-  animation: settle 0.5s var(--ease) both;
-}
-
-@keyframes settle {
-  from {
-    opacity: 0.35;
-    filter: blur(1.5px);
-  }
-  to {
-    opacity: 1;
-    filter: none;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .canvas-fresh {
-    animation: none;
-  }
 }
 
 .status-line {
@@ -787,8 +520,72 @@ a.button {
   margin-top: 8px;
 }
 
+/* Sources as footnotes */
+.sources {
+  max-width: var(--measure);
+  margin: 22px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--rule);
+}
+
+.sources h4,
 .follow-ups h4 {
   margin: 0 0 8px;
+}
+
+.sources ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: source;
+}
+
+.sources li {
+  counter-increment: source;
+  margin: 0;
+}
+
+.sources a {
+  display: grid;
+  grid-template-columns: 1.6em minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  text-decoration: none;
+}
+
+.sources a::before {
+  content: counter(source);
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: var(--accent);
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.source-title {
+  font-family: var(--font-text);
+  font-size: 1rem;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.15s;
+}
+
+.sources a:hover .source-title {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 0.2em;
+}
+
+.source-host {
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
 }
 
 /* Colophon (per-answer metadata) */
@@ -1150,19 +947,6 @@ a.button {
   box-shadow: 0 1px 2px rgb(0 0 0 / 8%), inset 0 -1.5px 0 var(--accent);
 }
 
-.switch-field {
-  margin: 0 0 14px;
-}
-
-.switch-field .switch-row {
-  margin-bottom: 0;
-}
-
-.switch-field .field-help {
-  margin: 4px 0 0;
-  max-width: 30em;
-}
-
 .switch-row {
   display: flex;
   align-items: center;
@@ -1227,52 +1011,58 @@ a.button {
   overflow-wrap: anywhere;
 }
 
-/* First visit: while the key card is up, the masthead steps back so the whole form
-   fits on screen — title smaller, the lede left to the card. */
-.masthead:has(+ .key-card) {
-  padding: 1.5vh 0 2.6vh;
+/* The hosted page is a design preview, not a pretend live chat. Put the
+   instructions above the fold even when the display is short. */
+.column--empty:has(.notice--preview) {
+  justify-content: flex-start;
+  padding-top: 22px;
 }
-
-.masthead:has(+ .key-card) .masthead-glyph {
-  margin-bottom: 8px;
+.column--empty:has(.notice--preview) .masthead {
+  padding: 10px 0 24px;
 }
-
-.masthead:has(+ .key-card) .masthead-title {
-  font-size: clamp(3.4rem, 8vw, 5.6rem);
+.column--empty:has(.notice--preview) .masthead-title {
+  font-size: clamp(3.6rem, 8vw, 6rem);
 }
-
-.masthead:has(+ .key-card) .masthead-rule {
-  margin: 16px auto 12px;
+.column--empty:has(.notice--preview) .masthead-rule {
+  margin: 15px auto 10px;
 }
-
-.masthead:has(+ .key-card) .masthead-kicker {
-  margin-bottom: 0;
+.column--empty:has(.notice--preview) .masthead-colophon {
+  margin-top: 6px;
+  min-height: 0;
 }
-
-.masthead:has(+ .key-card) .masthead-lede,
-.masthead:has(+ .key-card) .masthead-colophon {
-  display: none;
+.notice--preview {
+  border-left-color: var(--accent);
+  padding: 23px 28px;
 }
-
-.masthead + .key-card {
-  margin-top: 0;
+.notice--preview .notice-kicker {
+  margin: 0 0 8px;
+  color: var(--accent);
 }
-
-@media (max-width: 520px) {
-  .masthead:has(+ .key-card) {
-    padding: 0 0 18px;
-  }
-  .masthead:has(+ .key-card) .masthead-glyph {
-    display: none;
-  }
-  .masthead:has(+ .key-card) .masthead-title {
-    font-size: 3.1rem;
-  }
-  .masthead:has(+ .key-card) .masthead-rule {
-    margin: 12px auto 10px;
-  }
+.notice--preview .notice-title {
+  font-size: clamp(1.3rem, 2.4vw, 1.75rem);
 }
-
-.masthead + .notice {
-  margin-top: 4px;
+.notice--preview .notice-steps {
+  padding: 12px 0 12px 1.55em;
+  margin: 15px 0;
+  border-block: 1px solid var(--rule);
+}
+.notice--preview .notice-steps li {
+  padding-left: 4px;
+}
+.notice--preview .notice-aside {
+  font-size: 0.85rem;
+  color: var(--ink-3);
+}
+.notice--preview a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  color: var(--accent);
+}
+@media (max-width: 560px) {
+  /* The notice repeats the lede; give the setup steps the scarce mobile space. */
+  .column--empty:has(.notice--preview) { padding-top: 10px; }
+  .column--empty:has(.notice--preview) .masthead { padding: 0 0 13px; }
+  .column--empty:has(.notice--preview) .masthead-glyph { margin-bottom: 6px; }
+  .column--empty:has(.notice--preview) .masthead-lede { display: none; }
+  .notice--preview { padding: 18px 20px; }
 }

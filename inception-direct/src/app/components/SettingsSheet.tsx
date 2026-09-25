@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react';
-import { EFFORT_LABELS, LENGTH_LIMITS, LINKS, REASONING_EFFORTS } from '../../core/config';
-import { connect, currentModel, deleteAllChats, forgetApiKey, openKeyEditor, setUi, store, updateSettings } from '../controller';
-import { API_HOST } from '../env';
-import { formatAgo, formatContext, formatPerMillion, formatTokenLimit } from '../format';
+import { THINKING_LABELS, THINKING_MODES } from '../../site/config';
+import { connect, deleteAllChats, setUi, store, updateSettings, verify } from '../controller';
+import { formatAgo } from '../format';
 import { useStore } from '../store';
-import type { ConnectionState, ReadingFace, ThemeChoice } from '../types';
-import { CloseIcon, ExternalIcon } from './Icons';
+import type { ReadingFace, ThemeChoice, ConnectionState } from '../types';
+import { CloseIcon } from './Icons';
 
-function Segmented<T extends string | number>({
+function Segmented<T extends string>({
   value,
   options,
   onChange,
@@ -21,7 +20,7 @@ function Segmented<T extends string | number>({
   return (
     <div className="segmented" role="radiogroup" aria-label={label}>
       {options.map((option) => (
-        <button key={String(option.value)} type="button" role="radio" aria-checked={value === option.value} onClick={() => onChange(option.value)}>
+        <button key={option.value} type="button" role="radio" aria-checked={value === option.value} onClick={() => onChange(option.value)}>
           {option.label}
         </button>
       ))}
@@ -29,17 +28,14 @@ function Segmented<T extends string | number>({
   );
 }
 
-function Switch({ checked, onChange, label, help }: { checked: boolean; onChange: (value: boolean) => void; label: string; help?: string }) {
+function Switch({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
   return (
-    <div className="switch-field">
-      <label className="switch-row">
-        <span>{label}</span>
-        <button type="button" role="switch" aria-checked={checked} className="switch" onClick={() => onChange(!checked)}>
-          <span />
-        </button>
-      </label>
-      {help ? <p className="field-help">{help}</p> : null}
-    </div>
+    <label className="switch-row">
+      <span>{label}</span>
+      <button type="button" role="switch" aria-checked={checked} className="switch" onClick={() => onChange(!checked)}>
+        <span />
+      </button>
+    </label>
   );
 }
 
@@ -53,31 +49,20 @@ const FACES: { value: ReadingFace; label: string }[] = [
   { value: 'sans', label: 'Inter' },
 ];
 const STATUS_TEXT: Record<ConnectionState['status'], string> = {
-  'no-key': 'No API key yet',
-  connecting: 'Connecting…',
-  live: 'Live',
-  auth: 'Key rejected',
-  billing: 'Out of credit',
-  offline: 'Offline',
-  error: 'Error',
+  connecting: 'Connecting…', live: 'Live', challenge: 'Needs a security check',
+  offline: 'Offline', error: 'Error', preview: 'Hosted preview · no chat',
 };
 
 export function SettingsSheet() {
   const open = useStore(store, (s) => s.ui.settingsOpen);
   const settings = useStore(store, (s) => s.settings);
   const connection = useStore(store, (s) => s.connection);
-  const models = useStore(store, (s) => s.models);
   const [system, setSystem] = useState(settings.system);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [confirmForget, setConfirmForget] = useState(false);
-  const model = currentModel();
 
   useEffect(() => {
     if (open) setSystem(settings.system);
-    else {
-      setConfirmDelete(false);
-      setConfirmForget(false);
-    }
+    else setConfirmDelete(false);
   }, [open, settings.system]);
 
   useEffect(() => {
@@ -88,13 +73,6 @@ export function SettingsSheet() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open]);
-
-  const modelFacts = [
-    model.contextLength ? `${formatContext(model.contextLength)} context` : '',
-    model.pricing ? `${formatPerMillion(model.pricing.prompt)} in · ${formatPerMillion(model.pricing.completion)} out` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
 
   return (
     <>
@@ -111,47 +89,16 @@ export function SettingsSheet() {
           <section>
             <h3 className="small-caps">Answers</h3>
             <div className="field">
-              <span className="field-label">Model</span>
-              <Segmented label="Model" value={settings.model} options={models.map((m) => ({ value: m.id, label: m.name }))} onChange={(id) => updateSettings({ model: id })} />
-              {modelFacts ? <p className="field-help">{modelFacts}</p> : null}
-            </div>
-            <div className="field">
-              <span className="field-label">Thinking</span>
+              <span className="field-label">Thinking mode</span>
               <Segmented
-                label="Thinking effort"
-                value={settings.effort}
-                options={REASONING_EFFORTS.map((m) => ({ value: m, label: EFFORT_LABELS[m] }))}
-                onChange={(effort) => updateSettings({ effort })}
+                label="Thinking mode"
+                value={settings.thinking}
+                options={THINKING_MODES.map((m) => ({ value: m, label: THINKING_LABELS[m] }))}
+                onChange={(thinking) => updateSettings({ thinking })}
               />
             </div>
-            <Switch
-              label="Diffusion view"
-              checked={settings.diffusing}
-              onChange={(diffusing) => updateSettings({ diffusing })}
-              help="Stream Mercury’s denoising steps: the whole answer, refined in place until it settles."
-            />
-            <Switch
-              label="Reasoning summary"
-              checked={settings.reasoningSummary}
-              onChange={(reasoningSummary) => updateSettings({ reasoningSummary })}
-              help="Ask Inception for a short summary of how Mercury reasoned, when there is one."
-            />
-            <Switch
-              label="Suggest follow-up questions"
-              checked={settings.followUps}
-              onChange={(followUps) => updateSettings({ followUps })}
-              help="Written by Mercury after each answer — one small extra request."
-            />
-            <div className="field">
-              <span className="field-label">Length limit</span>
-              <Segmented
-                label="Length limit"
-                value={settings.lengthLimit}
-                options={LENGTH_LIMITS.map((n) => ({ value: n, label: formatTokenLimit(n) }))}
-                onChange={(lengthLimit) => updateSettings({ lengthLimit })}
-              />
-              <p className="field-help">Tokens per answer, reasoning included — capped at the model’s maximum.</p>
-            </div>
+            <Switch label="Search the web" checked={settings.webSearch} onChange={(webSearch) => updateSettings({ webSearch })} />
+            <Switch label="Suggest follow-up questions" checked={settings.followUps} onChange={(followUps) => updateSettings({ followUps })} />
             <div className="field">
               <label className="field-label" htmlFor="system-input">
                 Custom instructions
@@ -161,7 +108,7 @@ export function SettingsSheet() {
                 className="field-textarea"
                 rows={4}
                 value={system}
-                placeholder="Optional. Sent as the system message of every request."
+                placeholder="Optional. Sent at the start of each conversation."
                 onChange={(e) => setSystem(e.target.value)}
                 onBlur={() => updateSettings({ system })}
               />
@@ -207,61 +154,26 @@ export function SettingsSheet() {
               </div>
               <div>
                 <dt>Route</dt>
-                <dd>This browser → {API_HOST}, direct</dd>
-              </div>
-              <div>
-                <dt>API key</dt>
-                <dd>
-                  {connection.keyHint ? (
-                    <>
-                      <code>{connection.keyHint}</code> · {connection.remember ? 'remembered on this device' : 'this tab only'}
-                    </>
-                  ) : (
-                    'none'
-                  )}
-                </dd>
+                <dd>{connection.status === 'preview' ? 'Hosted preview (local companion not running)' : 'Your computer → dedicated Chrome → chat.inceptionlabs.ai'}</dd>
               </div>
               <div>
                 <dt>Session</dt>
                 <dd>
-                  {connection.checkedAt
-                    ? `checked ${formatAgo(connection.checkedAt)}${connection.latencyMs ? ` · handshake ${connection.latencyMs} ms` : ''}`
-                    : 'not yet'}
+                  {connection.fetchedAt ? `created ${formatAgo(connection.fetchedAt)} · renews automatically` : 'none yet'}
                 </dd>
               </div>
+              <div>
+                <dt>Tokens issued</dt>
+                <dd>{connection.refreshCount}</dd>
+              </div>
             </dl>
-            <div className="notice-actions">
-              <button type="button" className="button" onClick={() => void connect()} disabled={!connection.keyHint}>
-                Reconnect now
-              </button>
-              <button type="button" className="button" onClick={openKeyEditor}>
-                {connection.keyHint ? 'Change key' : 'Add key'}
-              </button>
-              {connection.keyHint ? (
-                confirmForget ? (
-                  <button
-                    type="button"
-                    className="button button--danger"
-                    onClick={() => {
-                      forgetApiKey();
-                      setConfirmForget(false);
-                    }}
-                  >
-                    Forget it
-                  </button>
-                ) : (
-                  <button type="button" className="button" onClick={() => setConfirmForget(true)}>
-                    Forget key…
-                  </button>
-                )
-              ) : null}
-            </div>
-            <p className="field-help">
-              The key is stored only in this browser and sent only to {API_HOST}.{' '}
-              <a href={LINKS.keys} target="_blank" rel="noopener noreferrer">
-                Manage keys <ExternalIcon size={12} />
-              </a>
-            </p>
+            {connection.status !== 'preview' && (
+              <div className="notice-actions">
+                <button type="button" className="button" onClick={() => void connect()}>Reconnect now</button>
+                <button type="button" className="button" onClick={() => void verify()}>Show site window</button>
+              </div>
+            )}
+            <p className="field-help">No API key or remote proxy. The site token and cookies stay in a dedicated Chrome profile on this computer. The companion only serves this UI on loopback.</p>
           </section>
 
           <section>

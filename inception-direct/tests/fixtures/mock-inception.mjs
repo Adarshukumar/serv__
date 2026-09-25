@@ -1,177 +1,153 @@
 // @ts-check
 /**
- * TEST FIXTURE ONLY — a local simulator of Inception's official API (api.inceptionlabs.ai).
+ * TEST FIXTURE ONLY — a local protocol simulator for chat.inceptionlabs.ai.
  *
- * The app never uses this. It lets the test-suite drive the real client, the real
- * streaming code and the real UI over a real socket, offline, with the wire format of
- * the live API (docs + OpenAPI spec, checked 2026-09-25):
+ * The app never uses this. It exists so the test-suite can exercise the real client,
+ * the real streaming code and the real UI over a real socket, offline, with the same
+ * wire protocol the live site speaks (verified 2026-09-24):
  *
- *   GET  /v1/models            → public model list (same shape as the live one)
- *   POST /v1/chat/completions  → JSON, or an SSE stream of `chat.completion.chunk`s
- *                                ending in `data: [DONE]`; `diffusing: true` streams the
- *                                full text at every denoising step
+ *   GET  /api/session     → { ok, token: "<unix>.<32hex>.<64hex>" } + session cookie
+ *   POST /api/chat        → text/event-stream, Vercel AI SDK UI-message stream
+ *   POST /api/follow-ups  → { follow_ups: string[] }
  *
- * CORS behaves like the live API (FastAPI/Starlette): the Origin is reflected with
- * allow-credentials, real preflights get the allow lists, a bare OPTIONS is a 405.
- *
- * It is strict on purpose — unknown parameters, malformed messages or a missing key are
- * rejected — so the tests fail if the client drifts from the documented protocol.
- *
- * Keys: "test-key" works, "broke-key" → 402, anything else → 401.
- * Triggers in the last user message: #error (error payload mid-stream), #429 (two 429s
- * first), #503 (one 503 first), #slow, #drop (connection cut mid-stream), #length
- * (finish_reason "length"), #nosummary (no reasoning summary).
+ * It is strict on purpose (validates token, cookie and body shape) so the tests fail
+ * if the client drifts from the protocol. Test controls:
+ *   - options.challenge / POST /__control { challenge: true } → Vercel checkpoint on /api/*
+ *     until GET / is visited (which sets the clearance cookie, like a real browser would)
+ *   - message text containing "#error" → error event mid-stream
+ *   - "#429"   → two 429 responses before succeeding
+ *   - "#slow"  → slow deltas (for stop/abort tests)
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import http from 'node:http';
 
-export const MODELS = [
-  {
-    id: 'mercury-2',
-    name: 'Inception: Mercury 2',
-    created: 1743465660,
-    input_modalities: ['text'],
-    output_modalities: ['text'],
-    context_length: 128000,
-    max_output_length: 50000,
-    pricing: { prompt: '0.00000025', completion: '0.00000075', input_cache_reads: '0.000000025', input_cache_writes: '0' },
-    supported_sampling_parameters: ['temperature', 'stop'],
-    supported_features: ['tools', 'json_mode', 'structured_outputs'],
-  },
-  {
-    id: 'mercury-2.5',
-    name: 'Inception: Mercury 2.5',
-    created: 1743465660,
-    input_modalities: ['text'],
-    output_modalities: ['text'],
-    context_length: 260000,
-    max_output_length: 65536,
-    pricing: { prompt: '0.00000004', completion: '0.00000015', input_cache_reads: '0.000000004', input_cache_writes: '0' },
-    supported_sampling_parameters: ['temperature', 'stop'],
-    supported_features: ['tools', 'json_mode', 'structured_outputs'],
-  },
-];
-
-const ALLOWED_PARAMS = new Set([
-  'model', 'messages', 'max_tokens', 'max_completion_tokens', 'temperature', 'stop', 'tools', 'tool_choice',
-  'stream', 'stream_options', 'diffusing', 'realtime', 'response_format', 'reasoning_summary',
-  'reasoning_summary_wait', 'reasoning_effort',
-]);
+const REASONING = ['Considering what is being asked.', 'Recalling the relevant facts.', 'Structuring a clear answer.'];
 
 /**
- * @param {{ port?: number, host?: string, blockDelayMs?: number, cors?: boolean, steps?: number }} [options]
+ * @param {{ port?: number, host?: string, challenge?: boolean, forceChallenge?: boolean, deltaDelayMs?: number, tokenTtlMs?: number }} [options]
  */
 export async function startMockInception(options = {}) {
   const state = {
-    rateLimited: new Map(), // question → count
-    overloaded: new Set(),
-    /** @type {{ kind: 'chat' | 'handshake' | 'follow-ups', model: string, effort?: string, diffusing: boolean, stream: boolean, includeUsage: boolean, reasoningSummary: boolean, maxTokens?: number, roles: string[], question: string, origin?: string }[]} */
-    requests: [],
-    /** @type {{ method: string, path: string, status: number, origin?: string, key?: string }[]} */
-    log: [],
+    challenge: options.challenge ?? false,
+    tokens: new Map(), // token → { sid, issuedAt }
+    sessions: new Set(),
+    rateLimited: new Map(), // chat id → count
+    abortedStreams: 0,
+    chats: /** @type {{ id: string, messages: number, reasoningEffort: string, webSearchEnabled: boolean, question: string, origin?: string }[]} */ ([]),
+    log: /** @type {{ method: string, path: string, status: number, origin?: string, cookie?: string }[]} */ ([]),
   };
-  const blockDelayMs = options.blockDelayMs ?? 14;
-  const cors = options.cors ?? true;
+  const deltaDelayMs = options.deltaDelayMs ?? 12;
+  const tokenTtlMs = options.tokenTtlMs ?? 13 * 60_000;
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const origin = req.headers.origin;
-    const key = bearer(req.headers.authorization);
-    const done = (/** @type {number} */ status) => state.log.push({ method: req.method ?? 'GET', path: url.pathname, status, origin, key });
-    const json = (/** @type {number} */ status, /** @type {unknown} */ body, /** @type {Record<string,string>} */ headers = {}) => {
-      res.writeHead(status, { 'content-type': 'application/json', ...headers }).end(JSON.stringify(body));
-      done(status);
-    };
-    const apiError = (/** @type {number} */ status, /** @type {string} */ message, /** @type {string} */ type, /** @type {string|null} */ code, /** @type {string|null} */ param = null) =>
-      json(status, { error: { message, type, param, code } });
+    const cookies = parseCookies(req.headers.cookie);
+    const done = (/** @type {number} */ status) =>
+      state.log.push({ method: req.method ?? 'GET', path: url.pathname, status, origin, cookie: req.headers.cookie });
 
-    if (cors && origin) {
-      res.setHeader('access-control-allow-origin', origin);
-      res.setHeader('access-control-allow-credentials', 'true');
-      res.setHeader('vary', 'Origin');
+    // Deliberately *no CORS* — like the real chat site. Only its own browser
+    // page can read /api/session or send x-session-token to /api/chat.
+
+    if (url.pathname === '/__control' && req.method === 'POST') {
+      const body = await readJson(req);
+      if (typeof body?.challenge === 'boolean') state.challenge = body.challenge;
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, challenge: state.challenge }));
+      return done(200);
     }
 
-    if (req.method === 'OPTIONS') {
-      if (cors && origin && req.headers['access-control-request-method']) {
-        res.writeHead(200, {
-          'access-control-allow-methods': 'DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT',
-          'access-control-allow-headers': String(req.headers['access-control-request-headers'] ?? ''),
-          'access-control-max-age': '600',
-          'content-type': 'text/plain; charset=utf-8',
-        });
-        res.end('OK');
+    if (url.pathname === '/') {
+      // Visiting the site "passes" the checkpoint, like the real JS challenge does in a browser.
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'set-cookie': '_vcrcs=cleared; Path=/; HttpOnly; SameSite=Lax',
+      });
+      res.end('<!doctype html><title>Inception Chat</title><p>mock site</p>');
+      return done(200);
+    }
+
+    if (url.pathname.startsWith('/api/') && state.challenge && (options.forceChallenge || cookies._vcrcs !== 'cleared')) {
+      res.writeHead(429, { 'content-type': 'text/html; charset=utf-8', 'x-vercel-mitigated': 'challenge', server: 'Vercel' });
+      res.end('<!doctype html><title>Vercel Security Checkpoint</title><script src="/.well-known/vercel/security/static/challenge.v2.min.js"></script>');
+      return done(429);
+    }
+
+    if (url.pathname === '/api/session' && req.method === 'GET') {
+      const sid = cookies.session && state.sessions.has(cookies.session) ? cookies.session : randomBytes(12).toString('hex');
+      state.sessions.add(sid);
+      const issuedAt = Math.floor(Date.now() / 1000);
+      const nonce = randomBytes(16).toString('hex');
+      const sig = createHash('sha256').update(`${issuedAt}.${nonce}.${sid}`).digest('hex');
+      const token = `${issuedAt}.${nonce}.${sig}`;
+      state.tokens.set(token, { sid, issuedAt: Date.now() });
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'cache-control': 'private, no-store',
+        'set-cookie': `session=${sid}; Path=/; HttpOnly; SameSite=Lax`,
+      });
+      res.end(JSON.stringify({ ok: true, token }));
+      return done(200);
+    }
+
+    if ((url.pathname === '/api/chat' || url.pathname === '/api/follow-ups') && req.method === 'POST') {
+      const auth = checkAuth(req, cookies, state, tokenTtlMs);
+      if (auth) {
+        res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: auth }));
+        return done(401);
+      }
+      const body = await readJson(req);
+
+      if (url.pathname === '/api/follow-ups') {
+        if (!Array.isArray(body?.messages) || body.messages.length < 2) {
+          res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'messages required' }));
+          return done(400);
+        }
+        const last = textOf(body.messages.at(-2));
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            follow_ups: [`Can you go deeper on “${last.slice(0, 40)}”?`, 'What are the common misconceptions?', 'Give me a concrete example.'],
+          }),
+        );
         return done(200);
       }
-      return json(405, { detail: 'Method Not Allowed' }, { allow: url.pathname === '/v1/models' ? 'GET' : 'POST' });
-    }
 
-    if (url.pathname === '/v1/models' || url.pathname === '/v1/chat/completions/models') {
-      if (req.method !== 'GET') return json(405, { detail: 'Method Not Allowed' }, { allow: 'GET' });
-      return json(200, { data: MODELS }, { 'cache-control': 'public, max-age=60' });
-    }
-
-    if (url.pathname !== '/v1/chat/completions') return json(404, { detail: 'Not Found' });
-    if (req.method !== 'POST') return json(405, { detail: 'Method Not Allowed' }, { allow: 'POST' });
-
-    if (!key) return apiError(401, 'Missing API key. Send it as Authorization: Bearer <key>.', 'authentication_error', 'invalid_api_key');
-    if (key === 'broke-key') return apiError(402, 'Account is inactive', 'account_error', 'account_error');
-    if (key !== 'test-key') return apiError(401, 'Incorrect API key provided', 'authentication_error', 'invalid_api_key');
-    if (!String(req.headers['content-type'] ?? '').includes('application/json')) {
-      return apiError(400, 'Content-Type must be application/json', 'invalid_request_error', null);
-    }
-
-    const body = await readJson(req);
-    const problem = validate(body);
-    if (problem) return apiError(problem.status, problem.message, problem.status === 404 ? 'invalid_request_error' : 'invalid_request_error', problem.code, problem.param);
-
-    const question = String(body.messages.at(-1)?.content ?? '');
-    const followUps = body.response_format?.json_schema?.name === 'follow_ups';
-    const kind = followUps ? 'follow-ups' : body.max_completion_tokens === 1 && !body.stream ? 'handshake' : 'chat';
-    state.requests.push({
-      kind,
-      model: body.model,
-      effort: body.reasoning_effort,
-      diffusing: body.diffusing === true,
-      stream: body.stream === true,
-      includeUsage: body.stream_options?.include_usage === true,
-      reasoningSummary: body.reasoning_summary === true,
-      maxTokens: body.max_completion_tokens ?? body.max_tokens,
-      roles: body.messages.map((/** @type {any} */ m) => m.role),
-      question,
-      origin,
-    });
-
-    // Triggers apply to answers only — not to follow-up requests whose transcript quotes them.
-    if (kind === 'chat' && question.includes('#429')) {
-      const n = (state.rateLimited.get(question) ?? 0) + 1;
-      state.rateLimited.set(question, n);
-      if (n <= 2) return apiError(429, 'Rate limit exceeded. Please try again later.', 'rate_limit_error', 'rate_limit_reached');
-    }
-    if (kind === 'chat' && question.includes('#503') && !state.overloaded.has(question)) {
-      state.overloaded.add(question);
-      return apiError(503, 'Engine overloaded', 'server_error', 'engine_overloaded');
-    }
-
-    const id = `chatcmpl-${randomBytes(6).toString('hex')}`;
-    const created = Math.floor(Date.now() / 1000);
-
-    if (!body.stream) {
-      const content = followUps
-        ? JSON.stringify({ follow_ups: [`What else should I know about ${topic(body)}?`, 'Can you give a concrete example?', 'What are common misconceptions?'] })
-        : 'O';
-      return json(200, {
-        id,
-        object: 'chat.completion',
-        created,
-        model: body.model,
-        choices: [{ index: 0, finish_reason: kind === 'handshake' ? 'length' : 'stop', message: { role: 'assistant', content } }],
-        usage: usage(12, kind === 'handshake' ? 1 : 40, 0),
+      const problem = validateChatBody(body);
+      if (problem) {
+        res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: problem }));
+        return done(400);
+      }
+      const question = textOf(body.messages.at(-1));
+      state.chats.push({
+        id: body.id,
+        messages: body.messages.length,
+        reasoningEffort: body.reasoningEffort,
+        webSearchEnabled: body.webSearchEnabled,
+        question,
+        origin,
       });
+
+      if (question.includes('#429')) {
+        const n = (state.rateLimited.get(body.id) ?? 0) + 1;
+        state.rateLimited.set(body.id, n);
+        if (n <= 2) {
+          res.writeHead(429, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'Too many requests' }));
+          return done(429);
+        }
+      }
+
+      res.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache',
+        'x-vercel-ai-ui-message-stream': 'v1',
+      });
+      done(200);
+      await streamAnswer(res, body, question, question.includes('#slow') ? 120 : deltaDelayMs, () => { state.abortedStreams++; });
+      return;
     }
 
-    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', 'x-accel-buffering': 'no' });
-    done(200);
-    await stream(res, body, question, { id, created, delay: question.includes('#slow') ? 110 : blockDelayMs, steps: options.steps ?? 10 });
+    res.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'not found' }));
+    done(404);
   });
 
   await new Promise((resolve) => server.listen(options.port ?? 0, options.host ?? '127.0.0.1', () => resolve(undefined)));
@@ -180,6 +156,9 @@ export async function startMockInception(options = {}) {
   return {
     url,
     state,
+    setChallenge: (/** @type {boolean} */ on) => {
+      state.challenge = on;
+    },
     close: () =>
       new Promise((resolve) => {
         server.closeAllConnections?.();
@@ -188,15 +167,49 @@ export async function startMockInception(options = {}) {
   };
 }
 
-/** The simulated answer: markdown, maths, code and multi-byte text — every rendering path. */
-export function answerFor(/** @type {any} */ body, /** @type {string} */ question) {
-  const history = body.messages.filter((/** @type {any} */ m) => m.role !== 'system').length;
-  return [
+/** @param {http.ServerResponse} res @param {any} body @param {string} question @param {number} delay @param {() => void} onAbort */
+async function streamAnswer(res, body, question, delay, onAbort) {
+  let closed = false;
+  let finished = false;
+  res.on('close', () => {
+    closed = true;
+    if (!finished) onAbort();
+  });
+  const send = (/** @type {any} */ event) => {
+    if (!closed) res.write(`data: ${event === '[DONE]' ? '[DONE]' : JSON.stringify(event)}\n\n`);
+  };
+  const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
+
+  send({ type: 'start', messageId: randomBytes(8).toString('hex') });
+  send({ type: 'start-step' });
+
+  if (body.reasoningEffort !== 'instant') {
+    send({ type: 'reasoning-start', id: 'r0' });
+    for (const line of REASONING) {
+      for (const piece of chunkWords(`${line}\n`)) {
+        if (closed) return;
+        send({ type: 'reasoning-delta', id: 'r0', delta: piece });
+        await sleep(delay);
+      }
+    }
+    send({ type: 'reasoning-end', id: 'r0' });
+  }
+
+  if (body.webSearchEnabled) {
+    send({ type: 'source-url', sourceId: 'search', url: '', title: '__searching__' });
+    await sleep(delay * 3);
+    send({ type: 'source-url', sourceId: 's1', url: 'https://example.org/physics/scattering', title: 'Scattering, explained' });
+    send({ type: 'source-url', sourceId: 's2', url: 'https://example.net/atmosphere', title: 'The atmosphere' });
+    send({ type: 'source-url', sourceId: 's3', url: 'https://example.org/physics/scattering#intro', title: 'Scattering, explained (duplicate)' });
+    send({ type: 'source-url', sourceId: 's4', url: 'https://example.com/light', title: 'Light and colour' });
+  }
+
+  const answer = [
     `## On “${question.replace(/#\w+/g, '').trim().slice(0, 60)}”`,
     '',
-    `This reply was streamed by the local API simulator from **${body.model}** with reasoning **${body.reasoning_effort ?? 'medium'}**, ` +
-      `${history} message(s) of history${body.messages[0]?.role === 'system' ? ' and a system message' : ''}. ` +
-      'It exists only for tests; the real app streams Mercury from api.inceptionlabs.ai.',
+    `This reply was streamed by the local protocol simulator with thinking **${body.reasoningEffort}**, ` +
+      `web search **${body.webSearchEnabled ? 'on' : 'off'}**, ${body.messages.length} message(s) of history and timezone ${body.timezone}. ` +
+      'It exists only for tests; the real app streams Mercury from chat.inceptionlabs.ai.',
     '',
     '- Multi-byte text survives chunking: नमस्ते 👋 — café ✓',
     '- Inline math renders: $e^{i\\pi} + 1 = 0$, prices do not: $5 and $10.',
@@ -210,148 +223,83 @@ export function answerFor(/** @type {any} */ body, /** @type {string} */ questio
     '',
     'End of the simulated answer.',
   ].join('\n');
-}
 
-/**
- * @param {http.ServerResponse} res @param {any} body @param {string} question
- * @param {{ id: string, created: number, delay: number, steps: number }} o
- */
-async function stream(res, body, question, o) {
-  let closed = false;
-  res.on('close', () => {
-    closed = true;
-  });
-  const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
-  const chunk = (/** @type {any} */ extra) => ({ id: o.id, object: 'chat.completion.chunk', created: o.created, model: body.model, ...extra });
-  const send = (/** @type {any} */ payload) => {
-    if (!closed) res.write(`data: ${payload === '[DONE]' ? '[DONE]' : JSON.stringify(payload)}\n\n`);
-  };
-  const choice = (/** @type {any} */ delta, /** @type {string|null} */ finish = null) => ({ choices: [{ index: 0, delta, finish_reason: finish }] });
-
-  const effort = body.reasoning_effort ?? 'medium';
-  const reasoningTokens = { instant: 0, low: 60, medium: 180, high: 420 }[/** @type {'instant'} */ (effort)] ?? 180;
-  // Reasoning happens before the first block arrives.
-  await sleep({ instant: 0, low: 60, medium: 160, high: 320 }[/** @type {'instant'} */ (effort)] ?? 160);
-  if (closed) return;
-
-  send(chunk(choice({ role: 'assistant', content: '' })));
-  const answer = answerFor(body, question);
-  const limited = question.includes('#length');
-  const text = limited ? answer.slice(0, 180) : answer;
-
-  if (body.diffusing) {
-    // A fixed canvas, refined in place: masked words settle over a few steps.
-    const tokens = text.split(/(\s+)/);
-    const order = tokens.map((_, i) => i).filter((i) => /\S/.test(tokens[i] ?? '')).sort(() => Math.random() - 0.5);
-    const settled = new Set();
-    const perStep = Math.ceil(order.length / o.steps);
-    for (let step = 0; step < o.steps; step++) {
-      for (const i of order.slice(step * perStep, (step + 1) * perStep)) settled.add(i);
-      const canvas = tokens.map((t, i) => (/\s/.test(t) || settled.has(i) ? t : noise(t))).join('');
-      if (closed) return;
-      send(chunk(choice({ content: canvas })));
-      await sleep(o.delay * 2);
+  send({ type: 'text-start', id: 't0' });
+  const pieces = chunkWords(answer);
+  for (let i = 0; i < pieces.length; i++) {
+    if (closed) return;
+    send({ type: 'text-delta', id: 't0', delta: pieces[i] });
+    if (question.includes('#error') && i === Math.floor(pieces.length / 3)) {
+      send({ type: 'error', errorText: 'Simulated upstream failure' });
+      send('[DONE]');
+      finished = true;
+      res.end();
+      return;
     }
-    send(chunk(choice({ content: text })));
-  } else {
-    const blocks = toBlocks(text);
-    for (let i = 0; i < blocks.length; i++) {
-      if (closed) return;
-      send(chunk(choice({ content: blocks[i] })));
-      if (question.includes('#error') && i === Math.floor(blocks.length / 3)) {
-        send({ error: { message: 'Simulated upstream failure', type: 'server_error', code: 'server_error' } });
-        res.end();
-        return;
-      }
-      if (question.includes('#drop') && i === Math.floor(blocks.length / 2)) {
-        res.socket?.destroy();
-        return;
-      }
-      await sleep(o.delay);
-    }
+    await sleep(delay);
   }
-
-  const summary =
-    body.reasoning_summary && effort !== 'instant' && !question.includes('#nosummary')
-      ? { content: 'Weighed what the question asks, recalled the relevant facts, and chose a structure that answers it directly.', status: 'complete' }
-      : null;
-  send(chunk({ ...choice({}, limited ? 'length' : 'stop'), ...(summary ? { reasoning_summary: summary } : {}) }));
-  if (body.stream_options?.include_usage) {
-    send(chunk({ choices: [], usage: usage(countTokens(JSON.stringify(body.messages)), countTokens(text) + reasoningTokens, reasoningTokens) }));
-  }
+  send({ type: 'text-end', id: 't0' });
+  send({ type: 'finish-step' });
+  send({ type: 'finish' });
   send('[DONE]');
+  finished = true;
   res.end();
 }
 
-function usage(/** @type {number} */ prompt, /** @type {number} */ completion, /** @type {number} */ reasoning) {
-  return {
-    prompt_tokens: prompt,
-    completion_tokens: completion,
-    total_tokens: prompt + completion,
-    prompt_tokens_details: { cached_tokens: 0 },
-    completion_tokens_details: { reasoning_tokens: reasoning },
-  };
-}
-
-const countTokens = (/** @type {string} */ s) => Math.max(1, Math.round(s.length / 4));
-
-/** Mercury emits blocks of refined text, not single tokens: a few words at a time. */
-function toBlocks(/** @type {string} */ text) {
-  const words = text.match(/\S+\s*|\s+/g) ?? [];
+/** Split into word-ish pieces, deliberately cutting some words, like token deltas. */
+function chunkWords(/** @type {string} */ text) {
   const out = [];
-  for (let i = 0; i < words.length; ) {
-    const size = 2 + (i % 4);
-    out.push(words.slice(i, i + size).join(''));
-    i += size;
+  const re = /\S+\s*|\s+/g;
+  let m;
+  while ((m = re.exec(text))) {
+    const piece = m[0];
+    if (piece.length > 7) {
+      out.push(piece.slice(0, 4), piece.slice(4));
+    } else out.push(piece);
   }
   return out;
 }
 
-function noise(/** @type {string} */ word) {
-  const glyphs = 'abcdefghijklmnopqrstuvwxyz';
-  let out = '';
-  for (let i = 0; i < Math.min(word.length, 12); i++) out += glyphs[Math.floor(Math.random() * glyphs.length)];
+function parseCookies(/** @type {string | undefined} */ header) {
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const part of (header ?? '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim();
+  }
   return out;
 }
 
-function topic(/** @type {any} */ body) {
-  const text = String(body.messages.at(-1)?.content ?? '');
-  const match = /User: ([^\n]{1,40})/.exec(text);
-  return match ? match[1].replace(/#\w+/g, '').trim() : 'this';
-}
-
-function bearer(/** @type {string | undefined} */ header) {
-  const match = /^Bearer\s+(.+)$/.exec(header ?? '');
-  return match ? match[1].trim() : null;
-}
-
-/** @returns {{ status: number, message: string, code: string | null, param: string | null } | null} */
-function validate(/** @type {any} */ body) {
-  const bad = (/** @type {string} */ message, /** @type {string|null} */ param = null, status = 400, /** @type {string|null} */ code = null) => ({ status, message, code, param });
-  if (!body || typeof body !== 'object' || Array.isArray(body)) return bad('Request body must be a JSON object.');
-  for (const k of Object.keys(body)) if (!ALLOWED_PARAMS.has(k)) return bad(`Unrecognized request argument supplied: ${k}`, k);
-  if (typeof body.model !== 'string') return bad('model is required', 'model');
-  const model = MODELS.find((m) => m.id === body.model);
-  if (!model) return bad(`model \`${body.model}\` not found`, 'model', 404, 'model_not_found');
-  if (!Array.isArray(body.messages) || body.messages.length === 0) return bad('messages must be a non-empty array', 'messages');
-  for (const [i, m] of body.messages.entries()) {
-    if (!m || !['system', 'user', 'assistant'].includes(m.role)) return bad(`messages[${i}].role is invalid`, 'messages');
-    if (typeof m.content !== 'string' || !m.content.trim()) return bad(`messages[${i}].content must be a non-empty string`, 'messages');
-    if (m.role === 'system' && i !== 0) return bad('the system message must come first', 'messages');
-    if (i > 0 && m.role !== 'system' && body.messages[i - 1].role === m.role) return bad('messages must alternate between user and assistant', 'messages');
-  }
-  if (body.messages.at(-1).role !== 'user') return bad('the last message must come from the user', 'messages');
-  if (body.reasoning_effort !== undefined && !['instant', 'low', 'medium', 'high'].includes(body.reasoning_effort)) return bad('invalid reasoning_effort', 'reasoning_effort');
-  for (const flag of ['stream', 'diffusing', 'realtime', 'reasoning_summary', 'reasoning_summary_wait']) {
-    if (body[flag] !== undefined && typeof body[flag] !== 'boolean') return bad(`${flag} must be a boolean`, flag);
-  }
-  if (body.stream_options !== undefined && (!body.stream || typeof body.stream_options !== 'object')) return bad('stream_options requires stream=true', 'stream_options');
-  const max = body.max_completion_tokens ?? body.max_tokens;
-  if (max !== undefined && (!Number.isInteger(max) || max < 1 || max > model.max_output_length)) {
-    return bad(`max_completion_tokens must be between 1 and ${model.max_output_length} for ${model.id}`, 'max_completion_tokens');
-  }
-  if (body.diffusing && !body.stream) return bad('diffusing requires stream=true', 'diffusing');
+/** @param {http.IncomingMessage} req @param {Record<string,string>} cookies @param {any} state @param {number} ttl */
+function checkAuth(req, cookies, state, ttl) {
+  const token = req.headers['x-session-token'];
+  if (typeof token !== 'string' || !token) return 'missing x-session-token';
+  const entry = state.tokens.get(token);
+  if (!entry) return 'unknown session token';
+  if (Date.now() - entry.issuedAt > ttl) return 'session token expired';
+  if (cookies.session !== entry.sid) return 'session cookie missing or mismatched';
   return null;
+}
+
+function validateChatBody(/** @type {any} */ body) {
+  if (!body || typeof body !== 'object') return 'body must be JSON';
+  if (!['instant', 'low', 'medium', 'high'].includes(body.reasoningEffort)) return 'invalid reasoningEffort';
+  if (typeof body.webSearchEnabled !== 'boolean') return 'webSearchEnabled must be boolean';
+  if (body.voiceMode !== false) return 'voiceMode must be false';
+  if (typeof body.timezone !== 'string' || !body.timezone) return 'timezone required';
+  if (typeof body.id !== 'string' || !body.id) return 'id required';
+  if (body.trigger !== 'submit-message') return 'trigger must be submit-message';
+  if (!Array.isArray(body.messages) || body.messages.length === 0) return 'messages required';
+  for (const m of body.messages) {
+    if (typeof m?.id !== 'string' || !['user', 'assistant'].includes(m.role) || !Array.isArray(m.parts)) return 'malformed message';
+    for (const part of m.parts) if (part?.type !== 'text' || typeof part.text !== 'string') return 'malformed part';
+  }
+  if (body.messages.at(-1).role !== 'user') return 'last message must be from the user';
+  return null;
+}
+
+function textOf(/** @type {any} */ message) {
+  return (message?.parts ?? []).filter((/** @type {any} */ p) => p?.type === 'text').map((/** @type {any} */ p) => p.text).join('');
 }
 
 /** @param {http.IncomingMessage} req */

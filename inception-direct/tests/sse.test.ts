@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SSEDecoder } from '../src/core/sse';
+import { SSEDecoder } from '../src/site/sse';
 
 function decodeAll(chunks: string[]): string[] {
   const decoder = new SSEDecoder();

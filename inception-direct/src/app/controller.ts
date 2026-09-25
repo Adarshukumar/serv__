@@ -1,69 +1,44 @@
 import {
-  FALLBACK_MODELS,
-  InceptionClient,
+  SourceCollector,
   createId,
   toInceptionError,
   type ChatTurn,
   type InceptionError,
-  type ModelInfo,
-  type RetryInfo,
-} from '../core';
-import { API_URL } from './env';
+} from '../site';
+import { LocalClient, PreviewOnlyError, type CompanionStatus } from './localClient';
 import * as storage from './storage';
 import { createStore } from './store';
 import type { AppState, AssistantMeta, ConnectionState, Conversation, Message, Settings } from './types';
 
 /**
- * The app's brain. React components only read the store and call these functions.
+ * The app's brain. No official API, no key, no extension, no remote proxy.
  *
- *   open the page ─► key saved? ── no ──► key card (paste once, kept in this browser)
- *                        │ yes
- *                        ▼
- *        handshake: one tiny real completion ─► live ─┬─ send → stream real text → follow-ups
- *                        │                             └─ 429 / 5xx → back off and retry
- *                        └─ 401 → key card · 402 → billing · offline → retry when back online
- *
- * Every request goes from this browser straight to Inception's API. Nothing in between.
+ * Start → the localhost companion opens Inception in a dedicated Chrome profile →
+ * same-origin /api/session → live → /api/chat SSE, sources, follow-ups. Only the
+ * companion holds the session token. The UI sees typed stream events, not cookies.
  */
 
 const STREAM_FRAME_MS = 40;
-
+const POLL_MS = 2_500;
 const initialSettings = storage.loadSettings();
-const storedKey = storage.loadKey();
-let apiKey: string | null = storedKey?.key ?? null;
+const client = new LocalClient();
 
 export const store = createStore<AppState>({
   ready: false,
   settings: initialSettings,
-  connection: {
-    status: apiKey ? 'connecting' : 'no-key',
-    checkedAt: null,
-    keyHint: apiKey ? storage.maskKey(apiKey) : null,
-    remember: storedKey?.remember ?? true,
-  },
-  models: [...FALLBACK_MODELS],
-  list: [],
-  active: null,
-  streamingId: null,
-  retry: null,
-  ui: { sidebarOpen: false, settingsOpen: false, keyEditor: false, keyCheck: false },
+  connection: { status: 'connecting', fetchedAt: null, issuedAt: null, refreshCount: 0, browserOpen: false },
+  list: [], active: null, streamingId: null,
+  ui: { sidebarOpen: false, settingsOpen: false },
 });
 
-const client = new InceptionClient({
-  apiUrl: API_URL,
-  getKey: () => apiKey,
-  onRetry: (info) => onRetry(info),
-});
-
-/** Conversations touched this session (the active one, and any that is still streaming). */
+/** Conversations touched this session (active one, and any that is still streaming). */
 const cache = new Map<string, Conversation>();
 const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
 let streaming: { convId: string; messageId: string; controller: AbortController } | null = null;
-/** An answer that failed for want of a working key/credit — retried once that's fixed. */
 let pendingRetry: { convId: string; messageId: string } | null = null;
 let connectRun = 0;
 let initialised = false;
+let polling = false;
 
 /* ────────────────────────────── setup ────────────────────────────── */
 
@@ -71,41 +46,21 @@ export async function init(): Promise<void> {
   if (initialised) return;
   initialised = true;
 
+  // The previous version required an official API key. It must not be left around
+  // on the user's device; this version never reads or sends it.
+  try { localStorage.removeItem('inception-direct.api-key.v1'); } catch { /* disabled */ }
+  try { sessionStorage.removeItem('inception-direct.api-key.v1'); } catch { /* disabled */ }
+
   const list = await storage.listConversations().catch(() => []);
   store.set((s) => ({ ...s, list, ready: true }));
-
-  window.addEventListener('online', () => {
-    const { status } = store.get().connection;
-    if (status === 'offline' || status === 'error') void connect();
-  });
+  await syncStatus();
+  window.setInterval(() => { if (document.visibilityState === 'visible') void syncStatus(); }, POLL_MS);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible') return;
-    const { status } = store.get().connection;
-    if (status === 'offline') void connect();
+    if (document.visibilityState === 'visible') void syncStatus();
   });
-
-  void loadModels();
-  // "On the start, create the session": prove key + route with one real round trip.
-  if (apiKey) await connect();
-}
-
-async function loadModels(): Promise<void> {
-  try {
-    const models = await client.models();
-    store.set((s) => ({ ...s, models }));
-    if (!models.some((m) => m.id === store.get().settings.model)) updateSettings({ model: models[0]!.id });
-  } catch {
-    // keep the built-in list
-  }
-}
-
-export function currentModel(): ModelInfo {
-  const { models, settings } = store.get();
-  return models.find((m) => m.id === settings.model) ?? models[0] ?? FALLBACK_MODELS[0]!;
-}
-
-function maxTokensFor(model: ModelInfo, settings: Settings): number {
-  return Math.min(settings.lengthLimit, model.maxOutput ?? settings.lengthLimit);
+  window.addEventListener('online', () => {
+    if (store.get().connection.status === 'offline') void connect();
+  });
 }
 
 /* ─────────────────────────── connection ─────────────────────────── */
@@ -114,87 +69,62 @@ function setConnection(patch: Partial<ConnectionState>): void {
   store.set((s) => ({ ...s, connection: { ...s.connection, ...patch } }));
 }
 
-/** The handshake. Resolves true when Inception accepted key, model and route. */
-export async function connect(): Promise<boolean> {
-  if (!apiKey) {
-    setConnection({ status: 'no-key', message: undefined, detail: undefined });
-    return false;
+function applyStatus(status: CompanionStatus): void {
+  setConnection({
+    status: status.status, message: status.message, detail: status.detail,
+    fetchedAt: status.fetchedAt, issuedAt: status.issuedAt,
+    refreshCount: status.refreshCount, browserOpen: status.browserOpen,
+  });
+  if (status.status === 'live' && pendingRetry && !streaming) {
+    const { convId, messageId } = pendingRetry;
+    pendingRetry = null;
+    void retry(messageId, convId);
   }
-  const run = ++connectRun;
-  setConnection({ status: 'connecting', message: undefined, detail: undefined });
+}
+
+async function syncStatus(): Promise<void> {
+  if (polling) return;
+  polling = true;
   try {
-    const { latencyMs } = await client.verify(currentModel().id);
-    if (run !== connectRun) return false;
-    setConnection({ status: 'live', latencyMs, checkedAt: Date.now(), message: undefined, detail: undefined });
-    if (pendingRetry && !streaming) {
-      const { convId, messageId } = pendingRetry;
-      pendingRetry = null;
-      void retry(messageId, convId);
+    applyStatus(await client.status());
+  } catch (error) {
+    if (error instanceof PreviewOnlyError) {
+      setConnection({ status: 'preview', message: error.message, detail: undefined });
+    } else {
+      const err = toInceptionError(error);
+      setConnection({ status: 'offline', message: err.message, detail: err.detail });
     }
-    return true;
+  } finally { polling = false; }
+}
+
+export async function connect(): Promise<boolean> {
+  if (store.get().connection.status === 'preview') return false;
+  const run = ++connectRun;
+  setConnection({ status: 'connecting', message: 'Opening the site browser and creating a session…', detail: undefined });
+  try {
+    const status = await client.connect();
+    if (run !== connectRun) return false;
+    applyStatus(status);
+    return status.status === 'live';
   } catch (error) {
     if (run !== connectRun) return false;
-    applyFailure(toInceptionError(error));
+    handleFailure(toInceptionError(error));
     return false;
   }
 }
 
-/** What a failure means for the connection as a whole. */
-function applyFailure(err: InceptionError): void {
-  switch (err.kind) {
-    case 'aborted':
-      return;
-    case 'no-key':
-      setConnection({ status: 'no-key', message: undefined, detail: undefined });
-      return;
-    case 'auth':
-      setConnection({ status: 'auth', message: err.message, detail: err.detail });
-      return;
-    case 'billing':
-      setConnection({ status: 'billing', message: err.message, detail: err.detail });
-      return;
-    case 'network':
-      setConnection({ status: 'offline', message: err.message, detail: err.detail });
-      return;
-    default:
-      setConnection({ status: 'error', message: err.message, detail: err.detail });
-  }
+function handleFailure(err: InceptionError): void {
+  if (err.kind === 'aborted') return;
+  if (err.kind === 'challenge') setConnection({ status: 'challenge', message: err.message, detail: err.detail });
+  else if (err.kind === 'network') setConnection({ status: 'offline', message: err.message, detail: err.detail });
+  else if (err.kind === 'auth') setConnection({ status: 'error', message: err.message, detail: err.detail });
+  // Rate limits, other HTTP errors and stream cuts belong to the message only.
 }
 
-/** Save a key (this browser only) and run the handshake with it. */
-export async function saveApiKey(raw: string, remember: boolean): Promise<boolean> {
-  const key = storage.cleanKey(raw);
-  if (!key) return false;
-  apiKey = key;
-  storage.saveKey(key, remember);
-  setConnection({ keyHint: storage.maskKey(key), remember });
-  setUi({ keyCheck: true });
-  try {
-    const ok = await connect();
-    if (ok) setUi({ keyEditor: false });
-    return ok;
-  } finally {
-    setUi({ keyCheck: false });
-  }
-}
-
-export function forgetApiKey(): void {
-  streaming?.controller.abort();
-  storage.forgetKey();
-  apiKey = null;
-  connectRun++;
-  pendingRetry = null;
-  setConnection({ status: 'no-key', keyHint: null, message: undefined, detail: undefined, latencyMs: undefined, checkedAt: null });
-  setUi({ keyEditor: false });
-}
-
-function onRetry(info: RetryInfo): void {
-  if (!streaming) return;
-  store.set((s) => ({ ...s, retry: { attempt: info.attempt, of: info.of, kind: info.kind, until: Date.now() + info.delayMs } }));
-}
-
-function clearRetry(): void {
-  if (store.get().retry) store.set((s) => ({ ...s, retry: null }));
+/** Show the site's real security check; never try to solve or bypass it. */
+export async function verify(): Promise<void> {
+  try { await client.showSite(); }
+  catch (error) { handleFailure(toInceptionError(error)); }
 }
 
 /* ─────────────────────────── conversations ─────────────────────────── */
@@ -256,10 +186,12 @@ function makeTitle(text: string): string {
 }
 
 export function newChat(): void {
+  pendingRetry = null;
   store.set((s) => ({ ...s, active: null, ui: { ...s.ui, sidebarOpen: false } }));
 }
 
 export async function selectChat(id: string): Promise<void> {
+  pendingRetry = null;
   const conversation = cache.get(id) ?? (await storage.loadConversation(id));
   if (!conversation) return;
   cache.set(id, conversation);
@@ -267,8 +199,8 @@ export async function selectChat(id: string): Promise<void> {
 }
 
 export async function deleteChat(id: string): Promise<void> {
-  if (streaming?.convId === id) streaming.controller.abort();
   if (pendingRetry?.convId === id) pendingRetry = null;
+  if (streaming?.convId === id) streaming.controller.abort();
   const timer = persistTimers.get(id);
   if (timer) clearTimeout(timer);
   persistTimers.delete(id);
@@ -282,8 +214,8 @@ export async function deleteChat(id: string): Promise<void> {
 }
 
 export async function deleteAllChats(): Promise<void> {
-  streaming?.controller.abort();
   pendingRetry = null;
+  streaming?.controller.abort();
   for (const timer of persistTimers.values()) clearTimeout(timer);
   persistTimers.clear();
   cache.clear();
@@ -295,30 +227,46 @@ export async function deleteAllChats(): Promise<void> {
 
 function freshAssistantFields(now: number): Partial<Message> {
   const { settings } = store.get();
-  const model = currentModel();
   const meta: AssistantMeta = {
-    model: model.id,
-    effort: settings.effort,
-    diffusing: settings.diffusing,
-    maxTokens: maxTokensFor(model, settings),
+    thinking: settings.thinking,
+    webSearch: settings.webSearch,
     startedAt: now,
   };
-  return { content: '', reasoningSummary: undefined, followUps: undefined, status: 'streaming', error: undefined, meta };
+  return {
+    content: '',
+    reasoning: '',
+    sources: [],
+    followUps: undefined,
+    status: 'streaming',
+    error: undefined,
+    searching: false,
+    searchFailed: false,
+    meta,
+  };
 }
 
 /** Finished turns before the given message, in the shape the client sends. */
 function historyFor(messages: readonly Message[]): ChatTurn[] {
   const turns: ChatTurn[] = [];
-  for (const m of messages) {
-    if (m.role === 'user') turns.push({ role: 'user', text: m.content });
-    else if ((m.status === 'done' || m.status === 'stopped') && m.content.trim()) turns.push({ role: 'assistant', text: m.content });
+  for (const [index, m] of messages.entries()) {
+    if (m.role === 'user') {
+      const reply = messages[index + 1];
+      // When starting a NEW answer, skip an older question whose answer failed
+      // (or was stopped before writing anything). Otherwise two adjacent user
+      // turns get merged by toWireMessages, repeating a failed prompt forever.
+      // On retry the target assistant isn't in this slice, so its question stays.
+      if (reply?.role === 'assistant' && (reply.status === 'error' || (reply.status === 'stopped' && !reply.content.trim()))) continue;
+      turns.push({ id: m.id, role: 'user', text: m.content });
+    } else if ((m.status === 'done' || m.status === 'stopped') && m.content.trim()) {
+      turns.push({ id: m.id, role: 'assistant', text: m.content });
+    }
   }
   return turns;
 }
 
 export async function send(text: string): Promise<void> {
   const value = text.trim();
-  if (!value || streaming) return;
+  if (!value || streaming || store.get().connection.status !== 'live') return;
   const now = Date.now();
 
   let conversation = store.get().active;
@@ -331,16 +279,17 @@ export async function send(text: string): Promise<void> {
   }
 
   const user: Message = { id: createId(), role: 'user', content: value, createdAt: now };
-  const assistant = { id: createId(), role: 'assistant', createdAt: now, ...freshAssistantFields(now) } as Message;
+  const assistant: Message = { id: createId(), role: 'assistant', createdAt: now, ...freshAssistantFields(now) } as Message;
   updateConversation(conversation.id, (c) => ({ ...c, updatedAt: now, messages: [...c.messages, user, assistant] }));
   persistNow(conversation.id);
 
   await streamAnswer(conversation.id, assistant.id);
 }
 
-/** Run (or re-run) an assistant message with the current settings. */
+/** Run (or re-run) an assistant message. */
 export async function retry(messageId: string, convId = store.get().active?.id): Promise<void> {
   if (!convId || streaming) return;
+  if (pendingRetry?.messageId === messageId) pendingRetry = null;
   const conversation = cache.get(convId) ?? (store.get().active?.id === convId ? store.get().active : null);
   if (!conversation?.messages.some((m) => m.id === messageId && m.role === 'assistant')) return;
   cache.set(convId, conversation);
@@ -360,85 +309,77 @@ async function streamAnswer(convId: string, messageId: string): Promise<void> {
 
   const turns = historyFor(conversation.messages.slice(0, index));
   const { settings } = store.get();
-  const meta: AssistantMeta = { ...(conversation.messages[index]!.meta as AssistantMeta) };
   const controller = new AbortController();
   streaming = { convId, messageId, controller };
-  if (pendingRetry?.messageId === messageId) pendingRetry = null;
-  store.set((s) => ({ ...s, streamingId: messageId, retry: null }));
+  store.set((s) => ({ ...s, streamingId: messageId }));
 
+  const meta: AssistantMeta = { ...(conversation.messages[index]!.meta as AssistantMeta) };
+  const sources = new SourceCollector();
   let text = '';
-  let pending = '';
-  let canvas: string | null = null;
-  let summary: string | undefined;
-  let streamError: { message: string; code?: string } | null = null;
+  let reasoning = '';
+  let pendingText = '';
+  let pendingReasoning = '';
+  let streamError: string | null = null;
   let frame: ReturnType<typeof setTimeout> | null = null;
 
-  // Paint at most every 40 ms: smooth, and cheap even at Mercury's speed.
   const flush = () => {
     if (frame) {
       clearTimeout(frame);
       frame = null;
     }
-    if (meta.diffusing) {
-      if (canvas === null || canvas === text) return;
-      text = canvas;
-    } else {
-      if (!pending) return;
-      text += pending;
-      pending = '';
-    }
-    updateMessage(convId, messageId, { content: text, meta: { ...meta } });
+    if (!pendingText && !pendingReasoning) return;
+    text += pendingText;
+    reasoning += pendingReasoning;
+    pendingText = '';
+    pendingReasoning = '';
+    updateMessage(convId, messageId, { content: text, reasoning });
   };
   const scheduleFlush = () => {
     frame ??= setTimeout(flush, STREAM_FRAME_MS);
   };
-  const markFirst = (now: number) => {
-    if (meta.firstTokenAt) return;
-    meta.firstTokenAt = now;
-    clearRetry();
-    updateMessage(convId, messageId, { meta: { ...meta } });
-  };
 
   try {
     for await (const event of client.chat({
-      model: meta.model,
+      chatId: convId,
       turns,
+      thinking: settings.thinking,
+      webSearch: settings.webSearch,
       system: settings.system,
-      effort: meta.effort,
-      diffusing: meta.diffusing,
-      maxTokens: meta.maxTokens ?? settings.lengthLimit,
-      reasoningSummary: settings.reasoningSummary,
       signal: controller.signal,
     })) {
       const now = Date.now();
       switch (event.type) {
-        case 'delta':
-          markFirst(now);
-          pending += event.text;
+        case 'reasoning-delta':
+          if (!meta.reasoningStartedAt) {
+            meta.reasoningStartedAt = now;
+            updateMessage(convId, messageId, { meta: { ...meta } });
+          }
+          pendingReasoning += event.delta;
           scheduleFlush();
           break;
-        case 'canvas':
-          // An empty frame never wipes text that has already arrived.
-          if (!event.text && canvas) break;
-          markFirst(now);
-          canvas = event.text;
-          meta.steps = (meta.steps ?? 0) + 1;
+        case 'text-delta':
+          if (!meta.firstTokenAt) {
+            meta.firstTokenAt = now;
+            if (meta.reasoningStartedAt && !meta.reasoningEndedAt) meta.reasoningEndedAt = now;
+            updateMessage(convId, messageId, { meta: { ...meta }, searching: false });
+          }
+          pendingText += event.delta;
           scheduleFlush();
           break;
-        case 'reasoning-summary':
-          if (event.summary.status === 'complete' && event.summary.content.trim()) summary = event.summary.content.trim();
+        case 'source':
+          if (sources.add(event.source)) updateMessage(convId, messageId, { sources: sources.list() });
           break;
-        case 'usage':
-          meta.usage = event.usage;
+        case 'searching':
+          updateMessage(convId, messageId, { searching: true });
           break;
-        case 'finish':
-          meta.finishReason = event.reason;
-          break;
-        case 'warning':
-          meta.warning = event.message;
+        case 'search-error':
+          updateMessage(convId, messageId, { searching: false, searchFailed: true });
           break;
         case 'error':
-          streamError = { message: event.message, code: event.code };
+          streamError = event.message;
+          break;
+        case 'abort':
+          streamError ??= 'The server stopped this answer early.';
           break;
         default:
           break;
@@ -447,54 +388,43 @@ async function streamAnswer(convId: string, messageId: string): Promise<void> {
 
     flush();
     meta.finishedAt = Date.now();
+    if (meta.reasoningStartedAt && !meta.reasoningEndedAt) meta.reasoningEndedAt = meta.finishedAt;
     const error = streamError
-      ? { kind: 'stream' as const, message: streamError.message, code: streamError.code }
+      ? { kind: 'stream' as const, message: streamError }
       : !text.trim()
-        ? {
-            kind: 'protocol' as const,
-            message:
-              meta.finishReason === 'length'
-                ? 'Mercury used the whole length limit before writing anything — raise it in Settings.'
-                : 'Mercury finished without writing an answer.',
-          }
+        ? { kind: 'protocol' as const, message: 'Mercury finished without writing an answer.' }
         : undefined;
-    updateMessage(convId, messageId, { content: text, status: error ? 'error' : 'done', error, reasoningSummary: summary, meta: { ...meta } });
-    if (store.get().connection.status !== 'live') {
-      setConnection({ status: 'live', message: undefined, detail: undefined, checkedAt: Date.now() });
-    }
-    if (!error && settings.followUps) void loadFollowUps(convId, messageId, meta.model, [...turns, { role: 'assistant', text }]);
+    updateMessage(convId, messageId, { status: error ? 'error' : 'done', error, searching: false, meta: { ...meta } });
+    if (store.get().connection.status !== 'live') void syncStatus();
+    if (!error && settings.followUps) void loadFollowUps(convId, messageId, [...turns, { role: 'assistant', text }]);
   } catch (error) {
     flush();
     const err = toInceptionError(error);
     meta.finishedAt = Date.now();
     if (err.kind === 'aborted') {
-      updateMessage(convId, messageId, { status: 'stopped', reasoningSummary: summary, meta: { ...meta } });
+      updateMessage(convId, messageId, { status: 'stopped', searching: false, meta: { ...meta } });
     } else {
       updateMessage(convId, messageId, {
         status: 'error',
-        reasoningSummary: summary,
+        searching: false,
         meta: { ...meta },
-        error: { kind: err.kind, message: err.message, detail: err.detail, code: err.code },
+        error: { kind: err.kind, message: err.message, detail: err.detail },
       });
-      if (err.kind === 'auth' || err.kind === 'billing' || err.kind === 'no-key') {
-        pendingRetry = { convId, messageId };
-        applyFailure(err);
-      } else if (err.kind === 'network' && typeof navigator !== 'undefined' && navigator.onLine === false) {
-        applyFailure(err);
-      }
+      if (err.kind === 'challenge') pendingRetry = { convId, messageId };
+      handleFailure(err);
     }
   } finally {
-    if (frame) clearTimeout(frame);
     if (streaming?.messageId === messageId) {
       streaming = null;
-      store.set((s) => ({ ...s, streamingId: null, retry: null }));
+      store.set((s) => ({ ...s, streamingId: null }));
     }
     persistNow(convId);
   }
+
 }
 
-async function loadFollowUps(convId: string, messageId: string, model: string, turns: ChatTurn[]): Promise<void> {
-  const list = await client.followUps(model, turns);
+async function loadFollowUps(convId: string, messageId: string, turns: ChatTurn[]): Promise<void> {
+  const list = await client.followUps(turns);
   if (list.length) updateMessage(convId, messageId, { followUps: list });
 }
 
@@ -508,9 +438,4 @@ export function updateSettings(patch: Partial<Settings>): void {
 
 export function setUi(patch: Partial<AppState['ui']>): void {
   store.set((s) => ({ ...s, ui: { ...s.ui, ...patch } }));
-}
-
-/** Open the key form (e.g. to switch keys) and bring it into view. */
-export function openKeyEditor(): void {
-  setUi({ keyEditor: true, settingsOpen: false, sidebarOpen: false });
 }

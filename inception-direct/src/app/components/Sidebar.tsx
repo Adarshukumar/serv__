@@ -22,7 +22,7 @@ export function Sidebar() {
           </span>
           <div>
             <div className="brand-name">Mercury</div>
-            <div className="brand-sub">Inception · Direct</div>
+            <div className="brand-sub">Inception · Local</div>
           </div>
           <button
             type="button"
@@ -70,7 +70,7 @@ export function Sidebar() {
         </nav>
 
         <footer className="sidebar-foot">
-          <p>No servers in between: this page talks to Inception’s API directly, over your own connection. Chats and key stay on this device.</p>
+          <p>No remote proxy: a dedicated browser on your computer talks to Inception. Chats stay on this device.</p>
           <p className="sidebar-version">v{VERSION}</p>
         </footer>
       </aside>
